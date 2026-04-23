@@ -54,6 +54,10 @@ CC_ROOT=$(cc_find_root) || {
 . "$CC_ROOT/lib/kill.sh"
 # shellcheck source=/dev/null
 . "$CC_ROOT/lib/track.sh"
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/config.sh"
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/history.sh"
 
 # ---- helpers ----------------------------------------------------------------
 
@@ -262,6 +266,7 @@ cmd_kill() {
       fi
       echo "killing $target + descendants..."
       cc_kill_tree "$target" "$grace" || rc=1
+      cc_history_append killed "" "$target" "" "user-kill-pid" "" 2>/dev/null || true
       ;;
     session)
       [ -z "$target" ] && { cc_usage_kill; return 2; }
@@ -275,6 +280,7 @@ cmd_kill() {
         cc_is_alive "$p" || continue
         echo "killing $p + descendants..."
         cc_kill_tree "$p" "$grace" || rc=1
+        cc_history_append killed "$target" "$p" "" "user-kill-session" "" 2>/dev/null || true
       done <<< "$roots"
       # If everything is gone, drop the tracking file.
       if [ -z "$(cc_session_live_pids "$target")" ]; then
@@ -293,6 +299,7 @@ cmd_kill() {
           cc_is_alive "$p" || continue
           echo "killing orphan $p + descendants (session $(cc_short_id "$id"))..."
           cc_kill_tree "$p" "$grace" || rc=1
+          cc_history_append killed "$id" "$p" "" "orphan-kill" "" 2>/dev/null || true
         done <<< "$roots"
         [ -z "$(cc_session_live_pids "$id")" ] && cc_session_delete "$id"
       done < <(cc_session_list)
@@ -430,6 +437,7 @@ hook_post_tool_use() {
     # hook runs synchronously under Claude, not as a descendant of a wrapper.
     [ "$kid" = "$$" ] && continue
     cc_session_add_spawn "$session_id" "$kid" "$command" "" 2>/dev/null || true
+    cc_history_append spawned "$session_id" "$kid" "$command" "" "" 2>/dev/null || true
   done < <(cc_descendants "$claude_pid")
 
   return 0
