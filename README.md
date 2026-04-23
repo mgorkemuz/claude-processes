@@ -55,12 +55,18 @@ Each subcommand supports `--help`.
 
 ## Slash commands (from inside Claude)
 
+Invoke with the namespaced form `/claude-processes:<name>` (TAB-completes after `/claude-p`).
+
 | Command | Behavior |
 |---|---|
-| `/processes [args]` | Run `list`, narrate notable findings. |
-| `/stash [args]` | Default to `--current`. Report what was stashed + RAM freed. |
-| `/resume [stash_id]` | List stashes if no id, otherwise `unstash`. |
-| `/cleanup [args]` | Default to `--dry-run --older-than 24h`. |
+| `/claude-processes:processes [args]` | Run `list`, narrate notable findings. |
+| `/claude-processes:status`           | One-line sessions/processes/orphans count. |
+| `/claude-processes:stash [args]`     | Default `--current`. Report what was stashed + RAM freed. |
+| `/claude-processes:stashes`          | Show all saved snapshots (table). |
+| `/claude-processes:resume [stash_id]`| Default `--latest`. Respawn in original cwd. |
+| `/claude-processes:rm [args]`        | Default `--latest`. Delete a stash without resuming. |
+| `/claude-processes:kill [args]`      | Terminate by pid / `--session` / `--orphans`. |
+| `/claude-processes:cleanup [args]`   | Default `--dry-run --older-than 24h`. |
 
 ## Config
 
