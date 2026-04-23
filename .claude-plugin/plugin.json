@@ -1,6 +1,6 @@
 {
   "name": "claude-clean",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Inspect and reclaim background processes that Claude Code's Bash tool leaves behind. Session-scoped tracking, surgical kill, orphan detection.",
   "author": { "name": "gorkemuz" },
   "license": "MIT",

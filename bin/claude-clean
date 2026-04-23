@@ -3,7 +3,7 @@
 # Bash tool. See README for the full story.
 set -u
 
-CC_VERSION="0.2.0"
+CC_VERSION="0.3.0"
 
 # ---- library resolution ------------------------------------------------------
 

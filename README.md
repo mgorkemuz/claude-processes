@@ -1,91 +1,152 @@
 # claude-clean
 
-Find and kill the dev servers, test watchers, and build processes that Claude Code leaves behind.
+> Inspect and reclaim the background processes Claude Code's Bash tool leaves running.
+
+A Claude Code plugin. Tracks `npm run dev`, `next dev`, `vitest --watch`, and every other long-running process the agent spawns. Surfaces them per session, kills them surgically, stashes them to free RAM, and nudges Claude when things grow out of control.
 
 ## The problem
 
-Claude Code spawns background processes through its Bash tool — `npm run dev`, `next dev`, `vitest --watch`, build processes. When a session ends (`/clear`, terminal closed, Claude crashes), these children don't always die. On macOS they reparent to `launchd` (PID 1) and keep running: holding ports, eating RAM, accumulating. An orphaned `next dev` can grow past 8 GB.
+Claude Code runs background commands through its Bash tool. When a session ends — `/clear`, a closed terminal, a crashed Claude — those children don't always die. On macOS they reparent to `launchd` and keep running: holding ports, eating RAM, accumulating across days. An orphaned `next dev` can grow past 8 GB.
 
-Upstream: [#43944](https://github.com/anthropics/claude-code/issues/43944), [#29011](https://github.com/anthropics/claude-code/issues/29011), [#22978](https://github.com/anthropics/claude-code/issues/22978), [#36117](https://github.com/anthropics/claude-code/issues/36117), [#20369](https://github.com/anthropics/claude-code/issues/20369).
+Upstream issues confirming the problem: [anthropics/claude-code#43944](https://github.com/anthropics/claude-code/issues/43944), [#33947](https://github.com/anthropics/claude-code/issues/33947), [#33979](https://github.com/anthropics/claude-code/issues/33979), [#29011](https://github.com/anthropics/claude-code/issues/29011), [#22978](https://github.com/anthropics/claude-code/issues/22978), [#7069](https://github.com/anthropics/claude-code/issues/7069). No official fix shipped in 2+ years. This is the gap claude-clean fills.
 
 ## Install
 
-As a Claude Code plugin:
+As a Claude Code plugin (recommended):
 
 ```
 /plugin install claude-clean
 ```
 
-Or from a local clone, for development:
+From a local clone for development:
 
 ```sh
 claude --plugin-dir /path/to/claude-clean
 ```
 
-Requires `jq`. macOS and Linux only.
+After any plugin update: `/reload-plugins`.
 
-### Upgrading from v0.1.0 (shell install)
+Requires `jq`. macOS and Linux supported.
 
-v0.1.0 used a shell-mode `install.sh`. v0.2.0+ ships as a plugin. If you installed v0.1.0 previously:
+## Features
 
-```sh
-./uninstall.sh          # removes the shell-mode binary, hook scripts, and settings.json entries
-/plugin install claude-clean
+1. **Visibility** — `claude-clean list` groups tracked processes by Claude session, with ports, RSS, uptime, FD count, and a friendly dev-server label (`Next.js :3000`).
+2. **Control** — `kill <pid> | --session <id> | --orphans` with a SIGTERM → grace → SIGKILL cascade. Surgical: killing session A never touches session B.
+3. **Stash / Resume** — snapshot a session's background processes (command + cwd + allowlisted env) and kill them to free RAM; respawn later in the original cwd with a single command.
+4. **Awareness** — PostToolUse RAM-threshold nudges (default 2 GB; rate-limited) and PreToolUse port-conflict warnings go back to Claude as `additionalContext` so the agent can reason about them.
+5. **Cleanup + digest** — `cleanup --older-than 24h` / `--over-ram 2GB` with TTY confirmation and `--dry-run`; opt-in `digest` aggregates activity over the last N days.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `claude-clean list [--session <id>] [--orphans]` | Tracked processes, grouped. |
+| `claude-clean status` | One-line summary. |
+| `claude-clean kill <pid \| --session <id> \| --orphans> [--grace <sec>]` | Terminate a tree; logs to history. |
+| `claude-clean stash <pid \| --session <id> \| --current>` | Snapshot + kill. Frees RAM and ports. |
+| `claude-clean stash list` | Show stashes with cwd, command, timestamp. |
+| `claude-clean unstash <stash_id> [--attach]` | Respawn in the original cwd. `--attach` registers the new pid with the current session. |
+| `claude-clean cleanup --older-than <dur> [--over-ram <size>] [--dry-run]` | Kill matching tracked processes after TTY confirm. |
+| `claude-clean digest [--since <dur>]` | Aggregate history.jsonl (opt-in). |
+| `claude-clean sessions` | List tracked session IDs. |
+| `claude-clean version` | Print version. |
+
+Each subcommand supports `--help`.
+
+## Slash commands (from inside Claude)
+
+| Command | Behavior |
+|---|---|
+| `/processes [args]` | Run `list`, narrate notable findings. |
+| `/stash [args]` | Default to `--current`. Report what was stashed + RAM freed. |
+| `/resume [stash_id]` | List stashes if no id, otherwise `unstash`. |
+| `/cleanup [args]` | Default to `--dry-run --older-than 24h`. |
+
+## Config
+
+`~/.claude/.clean/config.json` — optional, defaults in effect if missing.
+
+```json
+{
+  "version": 1,
+  "awareness": {
+    "ram_threshold_kb": 2097152,
+    "ram_alert_once_per_crossing": true,
+    "port_conflict_warn": true
+  },
+  "digest": { "enabled": false, "default_since": "7d" },
+  "stash": {
+    "env_allowlist": ["PATH", "NODE_ENV", "PORT", "NODE_OPTIONS"],
+    "env_allowlist_prefix": ["X_", "APP_"]
+  },
+  "kill": { "grace_seconds": 3, "safe_pgid_leader": false },
+  "notifications": { "macos_osascript": false },
+  "history": { "max_bytes": 1048576 }
+}
 ```
 
-## Use
-
-```sh
-claude-clean status                  # 2 sessions (1 active), 4 processes, 1 orphans
-claude-clean list                    # grouped by session, with ports/RSS/uptime
-claude-clean list --orphans          # only processes whose Claude is dead
-claude-clean kill --session cc7b3a   # terminate everything one session spawned
-claude-clean kill --orphans          # clean up all orphans
-claude-clean kill 12403              # kill one tree by PID
-```
-
-When a Claude session ends, the **Stop** hook prints a summary of the still-running processes plus the exact `claude-clean kill --session …` command.
+Edit with `jq` or by hand; no restart needed.
 
 ## How it works
 
-Claude hooks provide the event stream:
-- **SessionStart** records `session_id`, `cwd`, and the Claude PID in `~/.claude/.clean/<id>.json`.
-- **PostToolUse** (matcher `Bash`) walks the descendants of the Claude PID after every Bash tool call and records any new persistent processes. Idempotent — repeated walks don't duplicate entries.
-- **Stop** surfaces the still-alive tracked processes.
+Claude Code hooks drive the event stream. The plugin registers:
 
-`claude-clean list` intersects the tracked PIDs with live `ps` output and walks each tracked PID's descendants, so it finds children the hook never saw directly (e.g. a `next-server` forked by `next dev`). Orphans are processes still alive for a session whose `claude_pid` is no longer running.
+- **SessionStart** → record `session_id`, `cwd`, `claude_pid` in `~/.claude/.clean/<id>.json`.
+- **PreToolUse** (Bash) → parse the incoming command for port-binding patterns; warn if another tracked session already holds one.
+- **PostToolUse** (Bash) → walk the descendants of `claude_pid`, record any new persistent processes; run the RAM-threshold check.
+- **Stop** → print a summary of still-running tracked processes with the exact kill command.
 
-`kill` sends SIGTERM to the tree deepest-first, waits up to 3 seconds, then SIGKILLs any survivors.
+`list` intersects tracked PIDs with live `ps` output and walks each tracked PID's descendants, so it finds children the hook never saw directly (like `next-server` forked by `next dev`).
 
-A note on hooks: the spec called for `PreToolUse`, but the wrapper doesn't exist yet when `PreToolUse` fires. `PostToolUse` is the right moment. The Stop hook prints instead of prompting interactively, because Claude Code doesn't hand a TTY to hooks.
+`kill` sends SIGTERM to the tree deepest-first, waits up to `kill.grace_seconds`, then SIGKILLs survivors.
+
+`stash` reads the tracked command + cwd, captures allowlisted env vars (`ps -wwE` on macOS — may return `{}` due to recent hardening, falls back to inheriting current shell env; `/proc/<pid>/environ` on Linux), writes a snapshot to `~/.claude/.clean/stashed/<id>.json`, then kills. `unstash` respawns via `( ... & exec env -i ... nohup bash -c ... )` inside the original cwd.
+
+Awareness hooks emit `{"hookSpecificOutput": {"additionalContext": "..."}}` so Claude sees the warnings in conversation context, not just on stderr.
+
+## Relationship to cc-reaper
+
+[theQuert/cc-reaper](https://github.com/theQuert/cc-reaper) solves a **different** problem: it cleans up Claude's own internal spawns (MCP servers, subagents). claude-clean targets the processes *you* told Claude to start in the background (`run_in_background: true`). They're safe to run side-by-side:
+
+| | cc-reaper | claude-clean |
+|---|---|---|
+| Target | Claude's MCP/subagent leaks | User's backgrounded commands |
+| Detection | PGID + `stream-json` pattern | Shell-snapshot signature + tracked state |
+| Surgical per-session kill | No | Yes |
+| Port / RAM / FD surfacing | Partial | Yes |
+| Stash / resume | No | Yes |
+
+Borrowed from cc-reaper with gratitude: the FD count, the TTY-filter orphan heuristic, the PGID-leader safety gate (opt-in via `config.kill.safe_pgid_leader`).
+
+## Upgrading from v0.1.0
+
+v0.1.0 was a shell-mode install (`./install.sh`). v0.2.0+ is a plugin. To migrate:
+
+```sh
+./uninstall.sh                    # removes ~/.local/bin/claude-clean, hook scripts, settings.json entries
+/plugin install claude-clean
+```
 
 ## Uninstall
 
-Plugin users:
+Plugin users: `/plugin uninstall claude-clean`.
 
-```
-/plugin uninstall claude-clean
-```
-
-v0.1.0 shell-mode users (legacy):
-
-```sh
-./uninstall.sh
-```
-
-Either path clears tracking state at `~/.claude/.clean/` unless you pass `--keep-state`.
-
-## Related
-
-Complementary, not competing:
-- [theQuert/cc-reaper](https://github.com/theQuert/cc-reaper) — cleans up Claude's own internal leaks (MCP servers, subagents). claude-clean cleans up the processes *you* told Claude to run in the background. Safe to run side-by-side.
-- [Stargx/claude-code-dashboard](https://github.com/Stargx/claude-code-dashboard) — GUI session overview
-- claude-sessions-monitor, claude-control — conversation-level views
+Legacy shell users: `./uninstall.sh` — clears the state dir unless you pass `--keep-state`.
 
 ## Testing
 
-`./test/test-detect.sh` and `./test/test-tree.sh` exercise the detection and tree-walk libraries with synthetic processes.
+```sh
+./test/test-detect.sh
+./test/test-tree.sh
+./test/test-plugin-install.sh
+./test/test-config.sh
+./test/test-stash.sh
+./test/test-awareness.sh
+./test/test-cleanup.sh
+```
+
+All tests spawn synthetic processes and verify against a sandbox `HOME`. Run `for t in test/*.sh; do $t; done` to regress everything in ~10 seconds.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
