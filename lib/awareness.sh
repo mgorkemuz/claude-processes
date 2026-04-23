@@ -5,14 +5,14 @@
 #   cc_ram_threshold_check — PostToolUse nudge when a tracked process
 #     crosses config.awareness.ram_threshold_kb (default 2 GB).
 #     Rate-limited: one warning per below→above transition, via
-#     ~/.claude/.processes/<session>.alerts.json.
+#     ~/.claude/.shepherd/<session>.alerts.json.
 #   cc_port_conflict_check — PreToolUse advisory when the incoming Bash
 #     command looks like it will bind a port already held by another
 #     tracked process.
 # Both return plain text lines on stdout. cc_emit_context wraps them into
 # the hook-response JSON Claude Code reads back into the conversation.
 
-cc_alerts_file() { echo "${HOME}/.claude/.processes/${1}.alerts.json"; }
+cc_alerts_file() { echo "${HOME}/.claude/.shepherd/${1}.alerts.json"; }
 
 # cc_ram_threshold_check <session_id>
 # Compare live tracked pids' RSS to config threshold. Emit a warning line
@@ -52,7 +52,7 @@ cc_ram_threshold_check() {
     if [ "$is_over" = "true" ] && [ "$was_over" != "true" ]; then
       local cmd; cmd=$(ps -o command= -p "$p" 2>/dev/null | head -c 60 | sed 's/^ *//')
       local rss_mb=$((rss / 1024))
-      echo "⚠ claude-processes: pid $p ($cmd) crossed ${rss_mb} MB — consider 'claude-processes stash $p'"
+      echo "⚠ shepherd: pid $p ($cmd) crossed ${rss_mb} MB — consider 'shepherd stash $p'"
     fi
   done <<< "$live_pids"
 
@@ -91,7 +91,7 @@ cc_port_conflict_check() {
       while IFS= read -r wanted; do
         [ -z "$wanted" ] && continue
         if echo ",$ports," | grep -q ",${wanted},"; then
-          echo "⚠ claude-processes: port $wanted is already held by session ${s:0:6} (pid $p) — your command may fail to bind"
+          echo "⚠ shepherd: port $wanted is already held by session ${s:0:6} (pid $p) — your command may fail to bind"
         fi
       done <<< "$wanted_ports"
     done <<< "$pids"

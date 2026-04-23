@@ -1,9 +1,9 @@
 ---
 description: Delete a stashed snapshot without resuming it. Safe — does not affect running processes.
-allowed-tools: Bash(claude-processes:*)
+allowed-tools: Bash(shepherd:*)
 ---
 
-Run `claude-processes stash rm $ARGUMENTS`.
+Run `shepherd stash rm $ARGUMENTS`.
 
 If `$ARGUMENTS` is empty, default to `--latest` (remove the most recent stash). Report which stash was deleted (id + command + when).
 

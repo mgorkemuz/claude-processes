@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 export HOME="$TMP"
-export CC_STATE_DIR="$TMP/.claude/.processes"
+export CC_STATE_DIR="$TMP/.claude/.shepherd"
 mkdir -p "$CC_STATE_DIR"
 mkdir -p "$TMP/fake-project"
 

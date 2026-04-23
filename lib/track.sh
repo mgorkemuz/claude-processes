@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# track.sh — per-session tracking state in ~/.claude/.processes/<id>.json
+# track.sh — per-session tracking state in ~/.claude/.shepherd/<id>.json
 #
 # Schema:
 # {
@@ -17,7 +17,7 @@
 # Concurrency: each hook appends to the spawned array. We rely on a short
 # flock per write to avoid races between PreToolUse invocations.
 
-CC_STATE_DIR="${CC_STATE_DIR:-$HOME/.claude/.processes}"
+CC_STATE_DIR="${CC_STATE_DIR:-$HOME/.claude/.shepherd}"
 
 cc_state_dir() { echo "$CC_STATE_DIR"; }
 

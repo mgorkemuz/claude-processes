@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# config.sh — user-editable config at ~/.claude/.processes/config.json
+# config.sh — user-editable config at ~/.claude/.shepherd/config.json
 
-cc_config_file() { echo "${HOME}/.claude/.processes/config.json"; }
+cc_config_file() { echo "${HOME}/.claude/.shepherd/config.json"; }
 
 # cc_config_default — print the default skeleton JSON.
 # Single source of truth for new config keys.

@@ -11,7 +11,7 @@ ROOT="$(cd "$HERE/.." && pwd)"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP"
-mkdir -p "$TMP/.claude/.processes"
+mkdir -p "$TMP/.claude/.shepherd"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "ok: $*"; }

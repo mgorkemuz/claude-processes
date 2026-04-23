@@ -3,10 +3,10 @@
 # kill the tree (freeing RAM/ports), and later re-spawn it in the same cwd.
 #
 # Files:
-#   ~/.claude/.processes/stashed/<8-hex>.json
-#   /tmp/claude-processes-<8-hex>.log       (respawn stdout/stderr capture)
+#   ~/.claude/.shepherd/stashed/<8-hex>.json
+#   /tmp/shepherd-<8-hex>.log       (respawn stdout/stderr capture)
 
-cc_stash_dir() { echo "${HOME}/.claude/.processes/stashed"; }
+cc_stash_dir() { echo "${HOME}/.claude/.shepherd/stashed"; }
 
 # Generate a random 8-hex stash id. /dev/urandom + od is portable.
 cc_stash_new_id() {
@@ -246,7 +246,7 @@ cc_respawn() {
     env_args+=("$k=$v")
   done < <(printf '%s' "$env_json" | jq -r 'to_entries[] | "\(.key)=\(.value)"' 2>/dev/null)
 
-  local log_file="/tmp/claude-processes-${id}.log"
+  local log_file="/tmp/shepherd-${id}.log"
   local new_pid
   # exec inside a backgrounded subshell: the subshell's PID replaces itself
   # with env/nohup/bash, giving us a stable pid to return. Command-substitution

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-processes — inspect and terminate processes spawned by Claude Code's
+# shepherd — inspect and terminate processes spawned by Claude Code's
 # Bash tool. See README for the full story.
 set -u
 
@@ -29,10 +29,10 @@ cc_find_root() {
   local bindir; bindir=$(cc_resolve_self "$0")
   local candidates=(
     "$bindir/.."
-    "$bindir/../share/claude-processes"
-    "$HOME/.local/share/claude-processes"
-    "/usr/local/share/claude-processes"
-    "/opt/homebrew/share/claude-processes"
+    "$bindir/../share/shepherd"
+    "$HOME/.local/share/shepherd"
+    "/usr/local/share/shepherd"
+    "/opt/homebrew/share/shepherd"
   )
   local d
   for d in "${candidates[@]}"; do
@@ -42,7 +42,7 @@ cc_find_root() {
 }
 
 CC_ROOT=$(cc_find_root) || {
-  echo "claude-processes: cannot locate lib/ directory" >&2
+  echo "shepherd: cannot locate lib/ directory" >&2
   exit 1
 }
 
@@ -108,12 +108,12 @@ cmd_list() {
       --session=*) only_session="${1#--session=}"; shift ;;
       --orphans) only_orphans=1; shift ;;
       -h|--help) cc_usage_list; return 0 ;;
-      *) echo "claude-processes list: unknown arg: $1" >&2; return 2 ;;
+      *) echo "shepherd list: unknown arg: $1" >&2; return 2 ;;
     esac
   done
 
   cc_state_init
-  cc_have_jq || { echo "claude-processes: jq is required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq is required" >&2; return 1; }
 
   local any_output=0
   local sessions
@@ -194,7 +194,7 @@ cmd_list() {
 
 cc_usage_list() {
   cat <<'EOF'
-Usage: claude-processes list [--session <id>] [--orphans]
+Usage: shepherd list [--session <id>] [--orphans]
 
 Show Claude-spawned background processes, grouped by session. Orphans are
 processes whose originating Claude process is no longer alive.
@@ -205,7 +205,7 @@ EOF
 
 cmd_status() {
   cc_state_init
-  cc_have_jq || { echo "claude-processes: jq is required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq is required" >&2; return 1; }
 
   local sessions=0 active=0 procs=0 orphans=0
   local id
@@ -241,13 +241,13 @@ cmd_kill() {
       --latest)  mode="latest"; shift ;;
       --grace) grace="$2"; shift 2 ;;
       -h|--help) cc_usage_kill; return 0 ;;
-      -*) echo "claude-processes kill: unknown flag: $1" >&2; return 2 ;;
+      -*) echo "shepherd kill: unknown flag: $1" >&2; return 2 ;;
       *) target="$1"; shift ;;
     esac
   done
 
   cc_state_init
-  cc_have_jq || { echo "claude-processes: jq is required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq is required" >&2; return 1; }
 
   # No target and no explicit flag → default: kill the latest tracked pid.
   if [ "$mode" = "pid" ] && [ -z "$target" ]; then
@@ -336,13 +336,13 @@ cmd_kill() {
 cc_usage_kill() {
   cat <<'EOF'
 Usage:
-  claude-processes kill                  Kill the latest tracked process tree
+  shepherd kill                  Kill the latest tracked process tree
                                          (most recent started_at, still alive).
-  claude-processes kill <pid>            Kill one process and its descendants.
-  claude-processes kill --latest         Same as bare `kill`.
-  claude-processes kill --session <id>   Kill all tracked processes for a session.
-  claude-processes kill --orphans        Kill every orphaned process tree.
-  claude-processes kill --all            Kill every tracked process tree in
+  shepherd kill <pid>            Kill one process and its descendants.
+  shepherd kill --latest         Same as bare `kill`.
+  shepherd kill --session <id>   Kill all tracked processes for a session.
+  shepherd kill --orphans        Kill every orphaned process tree.
+  shepherd kill --all            Kill every tracked process tree in
                                          every session (nuclear option).
 
 Options:
@@ -363,7 +363,7 @@ cmd_adopt() {
     case "$1" in
       -h|--help)
         cat <<'EOF'
-Usage: claude-processes adopt <pid> [command-label]
+Usage: shepherd adopt <pid> [command-label]
 
 Register an externally-spawned pid (and its descendants) as tracked in the
 current Claude session. Afterwards it shows up in `list`, can be stash'd,
@@ -378,10 +378,10 @@ EOF
     esac
   done
 
-  [ -z "$pid" ] && { echo "usage: claude-processes adopt <pid> [command-label]" >&2; return 2; }
+  [ -z "$pid" ] && { echo "usage: shepherd adopt <pid> [command-label]" >&2; return 2; }
   case "$pid" in *[!0-9]*) echo "adopt: pid must be numeric" >&2; return 2 ;; esac
   cc_is_alive "$pid" || { echo "pid $pid is not alive" >&2; return 1; }
-  cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq required" >&2; return 1; }
 
   local cur; cur=$(cc_discover_current_session)
   if [ -z "$cur" ]; then
@@ -423,7 +423,7 @@ cmd_cleanup() {
       --over-ram=*)   over_ram="${1#--over-ram=}"; shift ;;
       --dry-run)      dry_run=1; shift ;;
       -h|--help)      cc_usage_cleanup; return 0 ;;
-      *) echo "claude-processes cleanup: unknown arg: $1" >&2; return 2 ;;
+      *) echo "shepherd cleanup: unknown arg: $1" >&2; return 2 ;;
     esac
   done
 
@@ -519,10 +519,10 @@ cmd_cleanup() {
 cc_usage_cleanup() {
   cat <<'EOF'
 Usage:
-  claude-processes cleanup                      Default preview: --older-than 24h --dry-run.
-  claude-processes cleanup --older-than <dur>   Kill tracked processes older than <dur>.
-  claude-processes cleanup --over-ram <size>    Kill tracked processes using > <size> RAM.
-  claude-processes cleanup --older-than <dur> --over-ram <size> --dry-run
+  shepherd cleanup                      Default preview: --older-than 24h --dry-run.
+  shepherd cleanup --older-than <dur>   Kill tracked processes older than <dur>.
+  shepherd cleanup --over-ram <size>    Kill tracked processes using > <size> RAM.
+  shepherd cleanup --older-than <dur> --over-ram <size> --dry-run
 
 <dur>  30s | 15m | 4h | 2d | N (seconds)
 <size> 512KB | 2MB | 4GB | N (KB)
@@ -540,7 +540,7 @@ cmd_digest() {
       --since)   since="$2"; shift 2 ;;
       --since=*) since="${1#--since=}"; shift ;;
       -h|--help) cc_usage_digest; return 0 ;;
-      *) echo "claude-processes digest: unknown arg: $1" >&2; return 2 ;;
+      *) echo "shepherd digest: unknown arg: $1" >&2; return 2 ;;
     esac
   done
 
@@ -550,12 +550,12 @@ cmd_digest() {
   local enabled; enabled=$(cc_config_get '.digest.enabled' false)
   if [ "$enabled" != "true" ]; then
     cat <<EOF
-claude-processes digest is opt-in. Turn it on with:
+shepherd digest is opt-in. Turn it on with:
 
   jq '.digest.enabled = true' ~/.claude/.clean/config.json > /tmp/c && \\
       mv /tmp/c ~/.claude/.clean/config.json
 
-Then:  claude-processes digest --since 7d
+Then:  shepherd digest --since 7d
 EOF
     return 0
   fi
@@ -600,7 +600,7 @@ EOF
   fi
 
   local mb; mb=$(echo "$stats" | jq -r '(.killed_ram_kb / 1024 | floor)')
-  echo "claude-processes digest (last $since):"
+  echo "shepherd digest (last $since):"
   echo "$stats" | jq -r '
     "  total events:   \(.total)",
     "  sessions:       \(.sessions)",
@@ -615,7 +615,7 @@ EOF
 
 cc_usage_digest() {
   cat <<'EOF'
-Usage: claude-processes digest [--since <dur>]
+Usage: shepherd digest [--since <dur>]
 
 Aggregate events from ~/.claude/.clean/history.jsonl since <dur> ago.
 Opt-in via config.digest.enabled (default false).
@@ -636,12 +636,12 @@ cmd_stash() {
       --session=*) mode="session"; target="${1#--session=}"; shift ;;
       --current)   mode="current"; shift ;;
       -h|--help)   cc_usage_stash; return 0 ;;
-      -*) echo "claude-processes stash: unknown flag: $1" >&2; return 2 ;;
+      -*) echo "shepherd stash: unknown flag: $1" >&2; return 2 ;;
       *)  mode="pid"; target="$1"; shift ;;
     esac
   done
 
-  cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq required" >&2; return 1; }
   cc_config_init
 
   local ids=()
@@ -674,7 +674,7 @@ cmd_stash() {
         local id; id=$(cc_stash_kill_target "$p") && ids+=("$id")
       done <<< "$roots"
       # Don't delete the session file — Claude is still running it. Without
-      # this, /claude-processes:unstash --attach loses its target session.
+      # this, /shepherd:unstash --attach loses its target session.
       ;;
     *) cc_usage_stash; return 2 ;;
   esac
@@ -682,7 +682,7 @@ cmd_stash() {
   if [ "${#ids[@]}" -gt 0 ]; then
     echo "stashed ${#ids[@]} process tree(s):"
     printf '  %s\n' "${ids[@]}"
-    echo "resume with: claude-processes unstash <stash_id>"
+    echo "resume with: shepherd unstash <stash_id>"
   else
     echo "nothing stashed"
   fi
@@ -695,12 +695,12 @@ cmd_unstash() {
       --attach)  attach="--attach"; shift ;;
       --latest)  use_latest=1; shift ;;
       -h|--help) cc_usage_unstash; return 0 ;;
-      -*) echo "claude-processes unstash: unknown flag: $1" >&2; return 2 ;;
+      -*) echo "shepherd unstash: unknown flag: $1" >&2; return 2 ;;
       *) target="$1"; shift ;;
     esac
   done
 
-  cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq required" >&2; return 1; }
 
   if [ "$use_latest" -eq 1 ]; then
     [ -n "$target" ] && { echo "unstash: --latest and explicit id are mutually exclusive" >&2; return 2; }
@@ -730,10 +730,10 @@ cmd_unstash() {
       echo "attached to session $(cc_short_id "$found_in")"
     else
       echo "⚠ --attach requested but no tracked session matched — pid $new_pid is NOT tracked"
-      echo "  (fix: /claude-processes:adopt $new_pid)"
+      echo "  (fix: /shepherd:adopt $new_pid)"
     fi
   fi
-  echo "logs: /tmp/claude-processes-${target}.log"
+  echo "logs: /tmp/shepherd-${target}.log"
 }
 
 cmd_stash_rm() {
@@ -745,9 +745,9 @@ cmd_stash_rm() {
       -h|--help)
         cat <<'EOF'
 Usage:
-  claude-processes stash rm <stash_id>   Remove one snapshot.
-  claude-processes stash rm --latest     Remove the most recent snapshot.
-  claude-processes stash rm --all        Remove every snapshot.
+  shepherd stash rm <stash_id>   Remove one snapshot.
+  shepherd stash rm --latest     Remove the most recent snapshot.
+  shepherd stash rm --all        Remove every snapshot.
 EOF
         return 0 ;;
       -*) echo "stash rm: unknown flag: $1" >&2; return 2 ;;
@@ -755,7 +755,7 @@ EOF
     esac
   done
 
-  cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq required" >&2; return 1; }
 
   case "$mode" in
     id)
@@ -784,25 +784,25 @@ EOF
 cc_usage_stash() {
   cat <<'EOF'
 Usage:
-  claude-processes stash <pid>               Stash a specific pid + descendants.
-  claude-processes stash --session <id>      Stash all processes of a session.
-  claude-processes stash --current           Stash this Claude session's processes.
-  claude-processes stash list                Show available snapshots.
-  claude-processes stash rm <id|--latest|--all>
+  shepherd stash <pid>               Stash a specific pid + descendants.
+  shepherd stash --session <id>      Stash all processes of a session.
+  shepherd stash --current           Stash this Claude session's processes.
+  shepherd stash list                Show available snapshots.
+  shepherd stash rm <id|--latest|--all>
                                              Delete a snapshot without respawning.
 
 Stash snapshots command, cwd, and allowlisted env vars to
 ~/.claude/.processes/stashed/<id>.json, then kills the tree.
-Resume with `claude-processes unstash <id>` (or --latest).
+Resume with `shepherd unstash <id>` (or --latest).
 EOF
 }
 
 cc_usage_unstash() {
   cat <<'EOF'
 Usage:
-  claude-processes unstash <stash_id>              Respawn in original cwd.
-  claude-processes unstash --latest                Respawn the most recent stash.
-  claude-processes unstash <id|--latest> --attach  Also register with the
+  shepherd unstash <stash_id>              Respawn in original cwd.
+  shepherd unstash --latest                Respawn the most recent stash.
+  shepherd unstash <id|--latest> --attach  Also register with the
                                                    current Claude session.
 EOF
 }
@@ -811,9 +811,9 @@ EOF
 
 cmd_prompt() {
   local id="$1"
-  [ -z "$id" ] && { echo "claude-processes prompt: session id required" >&2; return 2; }
+  [ -z "$id" ] && { echo "shepherd prompt: session id required" >&2; return 2; }
   cc_state_init
-  cc_have_jq || { echo "claude-processes: jq is required" >&2; return 1; }
+  cc_have_jq || { echo "shepherd: jq is required" >&2; return 1; }
 
   local live_pids; live_pids=$(cc_session_live_pids "$id")
   if [ -z "$live_pids" ]; then
@@ -832,10 +832,10 @@ cmd_prompt() {
     read -r ans < /dev/tty
     case "$ans" in
       y|Y|yes|YES) cmd_kill --session "$id" ;;
-      *) echo "leaving them alive. Run: claude-processes list    to see them later." ;;
+      *) echo "leaving them alive. Run: shepherd list    to see them later." ;;
     esac
   else
-    echo "(no tty — skipping confirmation; run 'claude-processes kill --session $id' to terminate)"
+    echo "(no tty — skipping confirmation; run 'shepherd kill --session $id' to terminate)"
   fi
 }
 
@@ -853,8 +853,8 @@ cmd_hook() {
     post-tool-use)       hook_post_tool_use       "$@" ;;
     user-prompt-submit)  hook_user_prompt_submit  "$@" ;;
     stop)                hook_stop                "$@" ;;
-    '') echo "claude-processes hook: subcommand required (session-start|pre-tool-use|post-tool-use|user-prompt-submit|stop)" >&2; return 2 ;;
-    *) echo "claude-processes hook: unknown sub: $sub" >&2; return 2 ;;
+    '') echo "shepherd hook: subcommand required (session-start|pre-tool-use|post-tool-use|user-prompt-submit|stop)" >&2; return 2 ;;
+    *) echo "shepherd hook: unknown sub: $sub" >&2; return 2 ;;
   esac
 }
 
@@ -935,10 +935,10 @@ hook_post_tool_use() {
   # Full command retained — stash/resume needs the exact string to respawn.
 
   # Self-filter: don't track invocations of our own CLI. Without this, a
-  # /claude-processes:processes slash command would leave a ghost "claude-
+  # /shepherd:processes slash command would leave a ghost "claude-
   # processes list" wrapper in the session's spawned[] and show up in
-  # stash --current. Matches claude-processes as a word (whole path OK).
-  if echo "$command" | grep -qE '(^|[^A-Za-z0-9_-])claude-processes([[:space:]]|$)'; then
+  # stash --current. Matches shepherd as a word (whole path OK).
+  if echo "$command" | grep -qE '(^|[^A-Za-z0-9_-])shepherd([[:space:]]|$)'; then
     return 0
   fi
 
@@ -1010,8 +1010,8 @@ hook_stop() {
       IFS=$'\t' read -r _ cmd rss etime ports <<< "$info"
       printf '  pid %s  %s  %s  %s\n' "$p" "$(cc_format_rss "$rss")" "$(cc_format_etime "$etime")" "$cmd"
     done <<< "$live_pids"
-    printf 'Suggest: claude-processes stash --session %s    (preserve + free RAM)\n' "$session_id"
-    printf 'Or:      claude-processes kill --session %s     (terminate)\n' "$session_id"
+    printf 'Suggest: shepherd stash --session %s    (preserve + free RAM)\n' "$session_id"
+    printf 'Or:      shepherd kill --session %s     (terminate)\n' "$session_id"
   )
   printf '%s\n' "$summary" | cc_emit_context Stop
   return 0
@@ -1057,8 +1057,8 @@ hook_user_prompt_submit() {
       IFS=$'\t' read -r _ cmd rss _ _ <<< "$info"
       printf '  pid %s  %s  %s\n' "$p" "$(cc_format_rss "$rss")" "$cmd"
     done <<< "$live_pids"
-    printf 'To preserve them: claude-processes stash --session %s\n' "$session_id"
-    printf 'Then resume later with: claude-processes unstash --latest\n'
+    printf 'To preserve them: shepherd stash --session %s\n' "$session_id"
+    printf 'Then resume later with: shepherd unstash --latest\n'
   )
   printf '%s\n' "$msg" | cc_emit_context UserPromptSubmit
   return 0
@@ -1082,7 +1082,7 @@ cmd_sessions() {
 
 cc_usage() {
   cat <<EOF
-claude-processes $CC_VERSION — inspect and kill Claude-spawned background processes.
+shepherd $CC_VERSION — inspect and kill Claude-spawned background processes.
 
 Commands:
   list [--session <id>] [--orphans]   Show tracked processes.
@@ -1105,7 +1105,7 @@ Commands:
 
 Files:
   Tracking state:  ~/.claude/.clean/<session>.json
-  Hook scripts:    ~/.claude/hooks/claude-processes/
+  Hook scripts:    ~/.claude/hooks/shepherd/
 EOF
 }
 
@@ -1124,9 +1124,9 @@ main() {
     prompt)   cmd_prompt "$@" ;;
     hook)     cmd_hook "$@" ;;
     sessions) cmd_sessions "$@" ;;
-    version|-v|--version) echo "claude-processes $CC_VERSION" ;;
+    version|-v|--version) echo "shepherd $CC_VERSION" ;;
     help|-h|--help) cc_usage ;;
-    *) echo "claude-processes: unknown command: $cmd" >&2; cc_usage >&2; exit 2 ;;
+    *) echo "shepherd: unknown command: $cmd" >&2; cc_usage >&2; exit 2 ;;
   esac
 }
 

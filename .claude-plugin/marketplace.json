@@ -6,7 +6,7 @@
       "description": "Inspect and reclaim background processes Claude Code's Bash tool leaves running. Session-scoped tracking, stash/resume, RAM and port awareness, surgical kill.",
       "source": {
         "source": "github",
-        "repo": "mgorkemuz/claude-processes"
+        "repo": "mgorkemuz/shepherd"
       }
     }
   ]

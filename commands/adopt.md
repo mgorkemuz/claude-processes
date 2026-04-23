@@ -1,9 +1,9 @@
 ---
 description: Register an externally-spawned pid as tracked in the current session (processes from a previous Claude, from another terminal, etc).
-allowed-tools: Bash(claude-processes:*)
+allowed-tools: Bash(shepherd:*)
 ---
 
-Run `claude-processes adopt $ARGUMENTS`.
+Run `shepherd adopt $ARGUMENTS`.
 
 If `$ARGUMENTS` is empty, ask the user which pid to adopt (and optionally a command label for nicer display).
 

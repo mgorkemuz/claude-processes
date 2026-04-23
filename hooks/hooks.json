@@ -1,5 +1,5 @@
 {
-  "description": "claude-processes: track Claude-Code-spawned background processes across SessionStart, PostToolUse (Bash), Stop.",
+  "description": "shepherd: track Claude-Code-spawned background processes across SessionStart, PreToolUse, PostToolUse (Bash), UserPromptSubmit, Stop.",
   "hooks": {
     "SessionStart": [
       {

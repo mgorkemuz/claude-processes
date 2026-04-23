@@ -3,11 +3,11 @@
 # the user is about to /clear or /new with tracked background processes
 # still alive. Non-blocking; just surfaces the fact.
 set -u
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -x "${CLAUDE_PLUGIN_ROOT}/bin/claude-processes" ]; then
-  exec "${CLAUDE_PLUGIN_ROOT}/bin/claude-processes" hook user-prompt-submit
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -x "${CLAUDE_PLUGIN_ROOT}/bin/shepherd" ]; then
+  exec "${CLAUDE_PLUGIN_ROOT}/bin/shepherd" hook user-prompt-submit
 fi
-for p in "$HOME/.local/bin/claude-processes" "/usr/local/bin/claude-processes" "/opt/homebrew/bin/claude-processes"; do
+for p in "$HOME/.local/bin/shepherd" "/usr/local/bin/shepherd" "/opt/homebrew/bin/shepherd"; do
   if [ -x "$p" ]; then exec "$p" hook user-prompt-submit; fi
 done
-if command -v claude-processes >/dev/null 2>&1; then exec claude-processes hook user-prompt-submit; fi
+if command -v shepherd >/dev/null 2>&1; then exec shepherd hook user-prompt-submit; fi
 exit 0

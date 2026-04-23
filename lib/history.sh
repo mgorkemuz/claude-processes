@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# history.sh — append-only JSONL log of claude-processes actions.
+# history.sh — append-only JSONL log of shepherd actions.
 # One JSON object per line. Used by `cmd_digest` for weekly summaries and
-# by humans via `jq -c '.' ~/.claude/.processes/history.jsonl`.
+# by humans via `jq -c '.' ~/.claude/.shepherd/history.jsonl`.
 #
 # Event types:
 #   spawned   — PostToolUse captured a new tracked process
@@ -10,7 +10,7 @@
 #   resumed   — Phase 4: cc_respawn re-launched a stashed command
 #   orphaned  — Phase 6: detected at digest time
 
-cc_history_file() { echo "${HOME}/.claude/.processes/history.jsonl"; }
+cc_history_file() { echo "${HOME}/.claude/.shepherd/history.jsonl"; }
 
 # cc_history_append <event_type> <session_id> [pid] [command] [reason] [ram_kb]
 # Locked append. Silent no-op if jq missing or write fails — history must
