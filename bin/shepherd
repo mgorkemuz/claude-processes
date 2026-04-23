@@ -881,10 +881,14 @@ hook_session_start() {
   cc_session_init "$session_id" "$PPID" "$cwd" 2>/dev/null || true
   cc_touch_current "$session_id"
 
-  # Opt-in: auto-clean orphans from previous Claude instances that crashed
-  # without firing Stop. Default false — user might intentionally keep a
-  # dev server alive across Claude restarts. Enable with:
-  #   jq '.kill.auto_orphans_on_session_start = true' \
+  # Auto-clean orphans from previous Claude instances that crashed without
+  # firing Stop. Default ON — orphans (claude_pid dead but children alive)
+  # are by definition leftovers from a crash. Graceful /exit flows through
+  # the Stop hook, which warns the user to stash/kill; anyone who wanted
+  # to preserve a dev server would have stashed. Concurrent Claude sessions
+  # aren't affected (their claude_pid is alive → not orphans).
+  # Disable:
+  #   jq '.kill.auto_orphans_on_session_start = false' \
   #     ~/.claude/.shepherd/config.json > /tmp/c && mv /tmp/c ~/.claude/.shepherd/config.json
   local auto_kill
   auto_kill=$(cc_config_get '.kill.auto_orphans_on_session_start' false)
