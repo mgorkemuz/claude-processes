@@ -98,16 +98,18 @@ cc_port_conflict_check() {
   done < <(cc_session_list)
 }
 
-# cc_emit_context
+# cc_emit_context <event_name>
 # Read lines from stdin, wrap them into a Claude Code hook JSON response
-# keyed at hookSpecificOutput.additionalContext. Falls back to passthrough
-# if jq missing.
+# keyed at hookSpecificOutput.additionalContext. The event_name must match
+# the firing hook (PreToolUse, PostToolUse, UserPromptSubmit, Stop, ...).
+# Falls back to plain passthrough if jq is missing.
 cc_emit_context() {
+  local event_name="${1:-PostToolUse}"
   local content; content=$(cat)
   [ -z "$content" ] && return 0
   if command -v jq >/dev/null 2>&1; then
-    jq -n --arg c "$content" \
-      '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $c}}' 2>/dev/null \
+    jq -n --arg c "$content" --arg e "$event_name" \
+      '{hookSpecificOutput: {hookEventName: $e, additionalContext: $c}}' 2>/dev/null \
       || echo "$content"
   else
     echo "$content"

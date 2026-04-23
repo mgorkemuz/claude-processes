@@ -69,10 +69,27 @@ cc_capture_env() {
   fi
 }
 
+# cc_tree_rss <pid>
+# Sum RSS (KB) of <pid> and all its descendants. Stashing this reports
+# what RAM the user will reclaim.
+cc_tree_rss() {
+  local root="$1"
+  [ -z "$root" ] && { echo 0; return; }
+  local total=0
+  local p
+  for p in "$root" $(cc_descendants "$root" | tr '\n' ' '); do
+    [ -z "$p" ] && continue
+    local r; r=$(ps -o rss= -p "$p" 2>/dev/null | tr -d ' ')
+    case "$r" in ''|*[!0-9]*) continue ;; esac
+    total=$((total + r))
+  done
+  echo "$total"
+}
+
 # cc_stash_create <pid>
 # Snapshot <pid> to disk WITHOUT killing. Echoes the stash_id.
 # Resolves cwd + command from tracked session first, falls back to live
-# lsof/ps inspection.
+# lsof/ps inspection. Captures tree RSS so digest can aggregate RAM freed.
 cc_stash_create() {
   local pid="$1"
   [ -z "$pid" ] && return 1
@@ -83,8 +100,6 @@ cc_stash_create() {
   local stash_id; stash_id=$(cc_stash_new_id)
   local snap_file="$(cc_stash_dir)/${stash_id}.json"
 
-  # Search tracked sessions for this pid — gives us the original command
-  # as recorded at PostToolUse time.
   local session_id="" cwd="" command=""
   local s
   while IFS= read -r s; do
@@ -99,11 +114,11 @@ cc_stash_create() {
     fi
   done < <(cc_session_list)
 
-  # Fallback: live lookups
   [ -z "$cwd" ]     && cwd=$(lsof -p "$pid" 2>/dev/null | awk '$4=="cwd" {print $NF}' | head -1)
   [ -z "$command" ] && command=$(ps -wwo command= -p "$pid" 2>/dev/null | sed 's/^ *//')
 
   local env_json; env_json=$(cc_capture_env "$pid")
+  local tree_rss; tree_rss=$(cc_tree_rss "$pid")
 
   jq -n \
     --arg id "$stash_id" \
@@ -113,8 +128,10 @@ cc_stash_create() {
     --arg command "$command" \
     --arg ts "$(cc_iso_now)" \
     --argjson env "$env_json" \
+    --argjson rss "$tree_rss" \
     '{stash_id: $id, session_id: $session, origin_pid: ($pid | tonumber),
-      cwd: $cwd, command: $command, env: $env, stashed_at: $ts}' \
+      cwd: $cwd, command: $command, env: $env,
+      origin_ram_kb: $rss, stashed_at: $ts}' \
     > "$snap_file"
 
   echo "$stash_id"
@@ -126,15 +143,41 @@ cc_stash_kill_target() {
   local pid="$1"
   local stash_id; stash_id=$(cc_stash_create "$pid") || return 1
   local snap_file="$(cc_stash_dir)/${stash_id}.json"
-  local cwd cmd session
-  cwd=$(jq -r '.cwd // ""' "$snap_file")
-  cmd=$(jq -r '.command // ""' "$snap_file")
+  local cwd cmd session ram_kb
+  cwd=$(jq -r '.cwd // ""'            "$snap_file")
+  cmd=$(jq -r '.command // ""'        "$snap_file")
   session=$(jq -r '.session_id // ""' "$snap_file")
+  ram_kb=$(jq -r '.origin_ram_kb // 0' "$snap_file")
 
   local grace; grace=$(cc_config_get '.kill.grace_seconds' 3)
   cc_kill_tree "$pid" "$grace" || true
-  cc_history_append stashed "$session" "$pid" "$cmd" "stash_id=$stash_id" "" 2>/dev/null || true
+  cc_history_append stashed "$session" "$pid" "$cmd" "stash_id=$stash_id" "$ram_kb" 2>/dev/null || true
   echo "$stash_id"
+}
+
+# cc_stash_rm <stash_id>
+# Remove a stash snapshot without respawning. Safe: no process is affected.
+cc_stash_rm() {
+  local id="$1"
+  [ -z "$id" ] && return 1
+  local f="$(cc_stash_dir)/${id}.json"
+  [ -f "$f" ] || { echo "stash not found: $id" >&2; return 1; }
+  rm -f "$f"
+}
+
+# cc_stash_rm_all
+# Wipe every stash snapshot. Returns count removed.
+cc_stash_rm_all() {
+  local dir; dir=$(cc_stash_dir)
+  [ -d "$dir" ] || { echo 0; return; }
+  local count=0
+  local f
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    rm -f "$f"
+    count=$((count + 1))
+  done
+  echo "$count"
 }
 
 # cc_stash_latest — echo the stash_id of the most recently stashed snapshot.
@@ -218,6 +261,21 @@ cc_respawn() {
   disown 2>/dev/null || true
 
   [ -z "$new_pid" ] && { echo "respawn failed" >&2; return 1; }
+
+  # Liveness check: wait briefly and confirm the respawned pid is still
+  # alive. If it died immediately, surface the log tail and keep the stash
+  # file so the user can retry or inspect.
+  sleep 0.4
+  if ! cc_is_alive "$new_pid"; then
+    {
+      echo "⚠ respawn of $id died within 400ms (pid was $new_pid)"
+      echo "--- log tail ($log_file) ---"
+      tail -n 20 "$log_file" 2>/dev/null | sed 's/^/  /'
+      echo "--- /log tail ---"
+      echo "stash kept at $(cc_stash_dir)/${id}.json — fix and retry unstash, or cc-rm it"
+    } >&2
+    return 1
+  fi
 
   if [ "$mode" = "--attach" ]; then
     local cur; cur=$(cc_discover_current_session)

@@ -69,6 +69,18 @@ out=$(cc_stash_list)
 echo "$out" | grep -q "$STASH_ID" || fail "stash list missing $STASH_ID"
 ok "cc_stash_list includes $STASH_ID"
 
+# --- stash snapshot captures origin_ram_kb ---
+ram=$(jq -r '.origin_ram_kb // 0' "$SNAP")
+case "$ram" in ''|*[!0-9]*) fail "origin_ram_kb not numeric: '$ram'" ;; esac
+[ "$ram" -ge 0 ] || fail "origin_ram_kb negative: $ram"
+ok "origin_ram_kb captured: $ram KB"
+
+# --- stashed history event carries ram_kb ---
+hist="$(cc_history_file)"
+stashed_ram=$(grep '"event":"stashed"' "$hist" | tail -1 | jq -r '.ram_kb // 0')
+case "$stashed_ram" in ''|*[!0-9]*) fail "stashed event ram_kb not numeric: '$stashed_ram'" ;; esac
+ok "stashed history event carries ram_kb = $stashed_ram"
+
 # --- cc_respawn: bring it back in the original cwd ---
 NEW_PID=$(cc_respawn "$STASH_ID")
 [ -n "$NEW_PID" ] || fail "cc_respawn returned empty"
@@ -104,4 +116,22 @@ fi
 
 kill -9 "$NEW_PID" 2>/dev/null || true
 NEW_PID=""
+
+# --- cc_stash_rm / rm_all ---
+# Seed a couple of dummy stashes
+mkdir -p "$(cc_stash_dir)"
+jq -cn '{stash_id:"dummy001",cwd:"/tmp",command:"x",env:{},stashed_at:"2026-01-01T00:00:00Z",origin_ram_kb:0}' > "$(cc_stash_dir)/dummy001.json"
+jq -cn '{stash_id:"dummy002",cwd:"/tmp",command:"y",env:{},stashed_at:"2026-01-02T00:00:00Z",origin_ram_kb:0}' > "$(cc_stash_dir)/dummy002.json"
+cc_stash_rm dummy001
+[ ! -f "$(cc_stash_dir)/dummy001.json" ] || fail "cc_stash_rm didn't delete dummy001"
+[ -f "$(cc_stash_dir)/dummy002.json" ]   || fail "cc_stash_rm over-reached to dummy002"
+ok "cc_stash_rm removes one by id"
+
+# Seed another, test rm_all
+jq -cn '{stash_id:"dummy003",cwd:"/tmp",command:"z",env:{},stashed_at:"2026-01-03T00:00:00Z",origin_ram_kb:0}' > "$(cc_stash_dir)/dummy003.json"
+count=$(cc_stash_rm_all)
+[ "$count" -eq 2 ] || fail "cc_stash_rm_all count expected 2, got $count"
+[ -z "$(ls -A "$(cc_stash_dir)" 2>/dev/null)" ] || fail "cc_stash_rm_all didn't clear the dir"
+ok "cc_stash_rm_all removed $count stashes"
+
 echo "--- test-stash: all passed ---"

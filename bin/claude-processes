@@ -3,7 +3,7 @@
 # Bash tool. See README for the full story.
 set -u
 
-CC_VERSION="0.4.0"
+CC_VERSION="0.5.0"
 
 # ---- library resolution ------------------------------------------------------
 
@@ -519,8 +519,9 @@ EOF
 # ---- subcommand: stash / unstash -------------------------------------------
 
 cmd_stash() {
-  # `stash list` is a sub-subcommand
+  # Sub-subcommands: list, rm
   if [ "${1:-}" = "list" ]; then shift; cc_stash_list "$@"; return; fi
+  if [ "${1:-}" = "rm" ]; then shift; cmd_stash_rm "$@"; return $?; fi
 
   local mode="" target=""
   while [ $# -gt 0 ]; do
@@ -607,6 +608,45 @@ cmd_unstash() {
   echo "logs: /tmp/claude-processes-${target}.log"
 }
 
+cmd_stash_rm() {
+  local mode="" target=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all)    mode="all"; shift ;;
+      --latest) mode="latest"; shift ;;
+      -h|--help)
+        cat <<'EOF'
+Usage:
+  claude-processes stash rm <stash_id>   Remove one snapshot.
+  claude-processes stash rm --latest     Remove the most recent snapshot.
+  claude-processes stash rm --all        Remove every snapshot.
+EOF
+        return 0 ;;
+      -*) echo "stash rm: unknown flag: $1" >&2; return 2 ;;
+      *) mode="id"; target="$1"; shift ;;
+    esac
+  done
+
+  cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+
+  case "$mode" in
+    id)
+      [ -z "$target" ] && { echo "stash rm: stash_id required" >&2; return 2; }
+      cc_stash_rm "$target" && echo "removed: $target"
+      ;;
+    latest)
+      local id; id=$(cc_stash_latest)
+      [ -z "$id" ] && { echo "no stashes to remove"; return 0; }
+      cc_stash_rm "$id" && echo "removed: $id (latest)"
+      ;;
+    all)
+      local n; n=$(cc_stash_rm_all)
+      echo "removed $n snapshot(s)"
+      ;;
+    *) echo "stash rm: need <id>, --latest, or --all" >&2; return 2 ;;
+  esac
+}
+
 cc_usage_stash() {
   cat <<'EOF'
 Usage:
@@ -614,10 +654,12 @@ Usage:
   claude-processes stash --session <id>      Stash all processes of a session.
   claude-processes stash --current           Stash this Claude session's processes.
   claude-processes stash list                Show available snapshots.
+  claude-processes stash rm <id|--latest|--all>
+                                             Delete a snapshot without respawning.
 
 Stash snapshots command, cwd, and allowlisted env vars to
-~/.claude/.clean/stashed/<id>.json, then kills the tree. Resume later with
-`claude-processes unstash <id>`.
+~/.claude/.processes/stashed/<id>.json, then kills the tree.
+Resume with `claude-processes unstash <id>` (or --latest).
 EOF
 }
 
@@ -672,11 +714,12 @@ cmd_prompt() {
 cmd_hook() {
   local sub="${1:-}"; [ $# -gt 0 ] && shift
   case "$sub" in
-    session-start) hook_session_start "$@" ;;
-    pre-tool-use)  hook_pre_tool_use  "$@" ;;
-    post-tool-use) hook_post_tool_use "$@" ;;
-    stop)          hook_stop          "$@" ;;
-    '') echo "claude-processes hook: subcommand required (session-start|pre-tool-use|post-tool-use|stop)" >&2; return 2 ;;
+    session-start)       hook_session_start       "$@" ;;
+    pre-tool-use)        hook_pre_tool_use        "$@" ;;
+    post-tool-use)       hook_post_tool_use       "$@" ;;
+    user-prompt-submit)  hook_user_prompt_submit  "$@" ;;
+    stop)                hook_stop                "$@" ;;
+    '') echo "claude-processes hook: subcommand required (session-start|pre-tool-use|post-tool-use|user-prompt-submit|stop)" >&2; return 2 ;;
     *) echo "claude-processes hook: unknown sub: $sub" >&2; return 2 ;;
   esac
 }
@@ -718,7 +761,7 @@ hook_pre_tool_use() {
 
   local warnings; warnings=$(cc_port_conflict_check "$command" 2>/dev/null | awk 'NF')
   if [ -n "$warnings" ]; then
-    printf '%s\n' "$warnings" | cc_emit_context
+    printf '%s\n' "$warnings" | cc_emit_context PreToolUse
   fi
   return 0
 }
@@ -790,7 +833,7 @@ hook_post_tool_use() {
   # just crossed the threshold. Rate-limited per pid.
   local ram_warnings; ram_warnings=$(cc_ram_threshold_check "$session_id" 2>/dev/null | awk 'NF')
   if [ -n "$ram_warnings" ]; then
-    printf '%s\n' "$ram_warnings" | cc_emit_context
+    printf '%s\n' "$ram_warnings" | cc_emit_context PostToolUse
   fi
 
   return 0
@@ -810,15 +853,69 @@ hook_stop() {
     return 0
   fi
 
-  # Stop hooks don't have TTY access in Claude Code, so we print a summary
-  # and the exact kill command instead of prompting. Claude renders stdout.
-  echo ""
-  echo "[claude-processes] Session ended with background processes still running:"
-  local p
-  while IFS= read -r p; do cc_print_process_line "$p"; done <<< "$live_pids"
-  echo ""
-  echo "To kill them:   claude-processes kill --session $session_id"
-  echo "To see others:  claude-processes list"
+  # Emit via additionalContext so Claude sees the state in-context and can
+  # proactively offer to stash/kill rather than the user having to remember.
+  local summary
+  summary=$(
+    printf 'Background processes still running in this session:\n'
+    local p
+    while IFS= read -r p; do
+      local info; info=$(cc_process_info "$p" 2>/dev/null)
+      [ -z "$info" ] && continue
+      local cmd rss etime ports
+      IFS=$'\t' read -r _ cmd rss etime ports <<< "$info"
+      printf '  pid %s  %s  %s  %s\n' "$p" "$(cc_format_rss "$rss")" "$(cc_format_etime "$etime")" "$cmd"
+    done <<< "$live_pids"
+    printf 'Suggest: claude-processes stash --session %s    (preserve + free RAM)\n' "$session_id"
+    printf 'Or:      claude-processes kill --session %s     (terminate)\n' "$session_id"
+  )
+  printf '%s\n' "$summary" | cc_emit_context Stop
+  return 0
+}
+
+hook_user_prompt_submit() {
+  cc_have_jq || return 0
+  local event; event=$(cc_read_event)
+  [ -z "$event" ] && return 0
+  local prompt session_id
+  prompt=$(jq -r '.prompt // empty' <<< "$event" 2>/dev/null)
+  session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
+  [ -z "$prompt" ] && return 0
+  [ -z "$session_id" ] && return 0
+
+  # Only intervene when the prompt looks like a session-reset: /clear, /new,
+  # or conversational "start fresh" / "new session" patterns.
+  local match=0
+  case "$prompt" in
+    /clear*|/new*) match=1 ;;
+  esac
+  if [ "$match" -eq 0 ]; then
+    case "$(echo "$prompt" | tr '[:upper:]' '[:lower:]')" in
+      *"start fresh"*|*"new session"*|*"reset context"*|*"clear context"*) match=1 ;;
+    esac
+  fi
+  [ "$match" -eq 0 ] && return 0
+
+  local live_pids; live_pids=$(cc_session_live_pids "$session_id" 2>/dev/null)
+  [ -z "$live_pids" ] && return 0
+  local count; count=$(printf '%s\n' "$live_pids" | awk 'NF' | wc -l | tr -d ' ')
+  [ "$count" -eq 0 ] && return 0
+
+  local msg
+  msg=$(
+    printf '%s tracked background process(es) will be orphaned by this reset.\n' "$count"
+    local p
+    while IFS= read -r p; do
+      local info; info=$(cc_process_info "$p" 2>/dev/null)
+      [ -z "$info" ] && continue
+      local cmd rss
+      IFS=$'\t' read -r _ cmd rss _ _ <<< "$info"
+      printf '  pid %s  %s  %s\n' "$p" "$(cc_format_rss "$rss")" "$cmd"
+    done <<< "$live_pids"
+    printf 'To preserve them: claude-processes stash --session %s\n' "$session_id"
+    printf 'Then resume later with: claude-processes unstash --latest\n'
+  )
+  printf '%s\n' "$msg" | cc_emit_context UserPromptSubmit
   return 0
 }
 
@@ -849,7 +946,9 @@ Commands:
   kill --session <id>                 Terminate everything a session spawned.
   kill --orphans                      Terminate all orphaned trees.
   stash <target>                      Snapshot + kill (see stash --help).
-  unstash <id>                        Respawn a stashed process.
+  stash list                          Show available snapshots.
+  stash rm <id|--latest|--all>        Delete a snapshot without resuming.
+  unstash <id|--latest>               Respawn a stashed process.
   cleanup --older-than <dur>          Kill old processes (see cleanup --help).
   cleanup --over-ram <size>           Kill RAM-heavy processes.
   digest [--since <dur>]              Aggregate history.jsonl (opt-in).
