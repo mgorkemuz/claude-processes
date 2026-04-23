@@ -137,6 +137,28 @@ cc_stash_kill_target() {
   echo "$stash_id"
 }
 
+# cc_stash_latest — echo the stash_id of the most recently stashed snapshot.
+# Empty when no stashes exist. Sorts by stashed_at ISO timestamp (lexicographic
+# comparison is correct for the UTC Z format we emit).
+cc_stash_latest() {
+  local dir; dir=$(cc_stash_dir)
+  [ -d "$dir" ] || return 0
+  local best_ts="" best_id=""
+  local f
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    local id ts
+    id=$(jq -r '.stash_id // ""' "$f" 2>/dev/null)
+    ts=$(jq -r '.stashed_at // ""' "$f" 2>/dev/null)
+    [ -z "$id" ] && continue
+    if [ -z "$best_ts" ] || [ "$ts" \> "$best_ts" ]; then
+      best_ts="$ts"
+      best_id="$id"
+    fi
+  done
+  [ -n "$best_id" ] && echo "$best_id"
+}
+
 # cc_stash_list — tabular listing of stashed snapshots.
 cc_stash_list() {
   local dir; dir=$(cc_stash_dir)

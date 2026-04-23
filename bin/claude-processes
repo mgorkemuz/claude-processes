@@ -580,18 +580,26 @@ cmd_stash() {
 }
 
 cmd_unstash() {
-  local target="" attach=""
+  local target="" attach="" use_latest=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --attach) attach="--attach"; shift ;;
+      --attach)  attach="--attach"; shift ;;
+      --latest)  use_latest=1; shift ;;
       -h|--help) cc_usage_unstash; return 0 ;;
       -*) echo "claude-processes unstash: unknown flag: $1" >&2; return 2 ;;
       *) target="$1"; shift ;;
     esac
   done
 
-  [ -z "$target" ] && { cc_usage_unstash; return 2; }
   cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+
+  if [ "$use_latest" -eq 1 ]; then
+    [ -n "$target" ] && { echo "unstash: --latest and explicit id are mutually exclusive" >&2; return 2; }
+    target=$(cc_stash_latest)
+    [ -z "$target" ] && { echo "no stashes to resume"; return 0; }
+    echo "(latest stash: $target)"
+  fi
+  [ -z "$target" ] && { cc_usage_unstash; return 2; }
 
   local new_pid; new_pid=$(cc_respawn "$target" "$attach") || return 1
   echo "resumed: pid $new_pid"
@@ -617,8 +625,9 @@ cc_usage_unstash() {
   cat <<'EOF'
 Usage:
   claude-processes unstash <stash_id>              Respawn in original cwd.
-  claude-processes unstash <stash_id> --attach     Also register with the
-                                                 current Claude session.
+  claude-processes unstash --latest                Respawn the most recent stash.
+  claude-processes unstash <id|--latest> --attach  Also register with the
+                                                   current Claude session.
 EOF
 }
 
@@ -744,6 +753,14 @@ hook_post_tool_use() {
   local command
   command=$(jq -r '.tool_input.command // ""' <<< "$event" 2>/dev/null)
   # Full command retained — stash/resume needs the exact string to respawn.
+
+  # Self-filter: don't track invocations of our own CLI. Without this, a
+  # /claude-processes:processes slash command would leave a ghost "claude-
+  # processes list" wrapper in the session's spawned[] and show up in
+  # stash --current. Matches claude-processes as a word (whole path OK).
+  if echo "$command" | grep -qE '(^|[^A-Za-z0-9_-])claude-processes([[:space:]]|$)'; then
+    return 0
+  fi
 
   # Only record DIRECT children of claude_pid as wrappers — the pids that
   # correspond 1:1 with this Bash tool call. Their full subtree goes into
