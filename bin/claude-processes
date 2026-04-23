@@ -805,26 +805,32 @@ hook_post_tool_use() {
     return 0
   fi
 
-  # Only record DIRECT children of claude_pid as wrappers — the pids that
-  # correspond 1:1 with this Bash tool call. Their full subtree goes into
-  # child_pids. Walking all descendants (the old behavior) mis-attributed
-  # processes from an earlier tool call to whatever tool_input.command
-  # this hook fired for. E.g. `npm run dev` from call 1 looked like it
-  # came from `claude-processes list` in call 2, so stash captured the
-  # wrong command to respawn.
+  # Record only Bash-tool wrappers as spawns. Two filters stacked:
+  #   (a) direct children of claude_pid — wrappers correspond 1:1 with a
+  #       Bash tool call, walking all descendants mis-attributed commands
+  #       from an earlier call to a later one (fixed earlier).
+  #   (b) the process's argv still contains the shell-snapshot signature —
+  #       the kernel-visible marker of our wrapper. Claude Code also
+  #       direct-spawns internal helpers (caffeinate for keep-awake, MCP
+  #       servers, etc.) which we should NEVER treat as user workloads.
   local kid
   while IFS= read -r kid; do
     [ -z "$kid" ] && continue
     if printf '%s\n' "$existing" | grep -qFx "$kid"; then continue; fi
     cc_is_alive "$kid" || continue
     [ "$kid" = "$$" ] && continue
-    # Descendants of this direct child form the subtree.
+    # Filter (b): must look like our bash-tool wrapper.
+    local kid_cmd; kid_cmd=$(ps -wwo command= -p "$kid" 2>/dev/null)
+    case "$kid_cmd" in
+      *"$CC_WRAPPER_SIGNATURE"*) ;;
+      *) continue ;;
+    esac
+    # Descendants of this wrapper form the subtree.
     local kid_children=()
     local c
     while IFS= read -r c; do
       [ -n "$c" ] && kid_children+=("$c")
     done < <(cc_descendants "$kid")
-    # Expand array safely under `set -u` when empty (bash 3.2 gotcha).
     cc_session_add_spawn "$session_id" "$kid" "$command" "" ${kid_children[@]+"${kid_children[@]}"} 2>/dev/null || true
     cc_history_append spawned "$session_id" "$kid" "$command" "" "" 2>/dev/null || true
   done < <(cc_children "$claude_pid")
