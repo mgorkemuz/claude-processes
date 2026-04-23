@@ -332,6 +332,67 @@ Options:
 EOF
 }
 
+# ---- subcommand: adopt -----------------------------------------------------
+# Register an externally-spawned pid as tracked in the current Claude session.
+# Covers the gap where a process:
+#  - survived a Claude Code restart (new session can't see old tracked state)
+#  - was unstash'd in a pre-0.5.1 version that didn't auto-attach
+#  - was launched outside Claude entirely but you want to manage it
+
+cmd_adopt() {
+  local pid="" cmd_override=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help)
+        cat <<'EOF'
+Usage: claude-processes adopt <pid> [command-label]
+
+Register an externally-spawned pid (and its descendants) as tracked in the
+current Claude session. Afterwards it shows up in `list`, can be stash'd,
+killed via `kill --session`, etc.
+
+  command-label (optional): string to store as the command for this entry.
+  Defaults to the output of `ps -wwo command= -p <pid>`.
+EOF
+        return 0 ;;
+      -*) echo "adopt: unknown flag: $1" >&2; return 2 ;;
+      *) if [ -z "$pid" ]; then pid="$1"; else cmd_override="$1"; fi; shift ;;
+    esac
+  done
+
+  [ -z "$pid" ] && { echo "usage: claude-processes adopt <pid> [command-label]" >&2; return 2; }
+  case "$pid" in *[!0-9]*) echo "adopt: pid must be numeric" >&2; return 2 ;; esac
+  cc_is_alive "$pid" || { echo "pid $pid is not alive" >&2; return 1; }
+  cc_have_jq || { echo "claude-processes: jq required" >&2; return 1; }
+
+  local cur; cur=$(cc_discover_current_session)
+  if [ -z "$cur" ]; then
+    echo "no active Claude session detected — adopt only works inside a Claude session" >&2
+    return 1
+  fi
+
+  local cmd="$cmd_override"
+  if [ -z "$cmd" ]; then
+    cmd=$(ps -wwo command= -p "$pid" 2>/dev/null | sed 's/^ *//')
+  fi
+  [ -z "$cmd" ] && cmd="adopted-pid-$pid"
+
+  local desc=()
+  local d
+  while IFS= read -r d; do
+    [ -n "$d" ] && desc+=("$d")
+  done < <(cc_descendants "$pid")
+
+  cc_session_add_spawn "$cur" "$pid" "$cmd" "" ${desc[@]+"${desc[@]}"} 2>/dev/null || {
+    echo "failed to record pid in session state" >&2; return 1
+  }
+  cc_history_append spawned "$cur" "$pid" "$cmd" "adopted" "" 2>/dev/null || true
+
+  echo "adopted pid $pid into session $(cc_short_id "$cur")"
+  echo "  command: $cmd"
+  [ "${#desc[@]}" -gt 0 ] && echo "  + ${#desc[@]} descendant pid(s) captured"
+}
+
 # ---- subcommand: cleanup ---------------------------------------------------
 
 cmd_cleanup() {
@@ -976,6 +1037,7 @@ Commands:
   stash list                          Show available snapshots.
   stash rm <id|--latest|--all>        Delete a snapshot without resuming.
   unstash <id|--latest>               Respawn a stashed process.
+  adopt <pid> [label]                 Track an externally-spawned pid.
   cleanup --older-than <dur>          Kill old processes (see cleanup --help).
   cleanup --over-ram <size>           Kill RAM-heavy processes.
   digest [--since <dur>]              Aggregate history.jsonl (opt-in).
@@ -999,6 +1061,7 @@ main() {
     kill)     cmd_kill "$@" ;;
     stash)    cmd_stash "$@" ;;
     unstash)  cmd_unstash "$@" ;;
+    adopt)    cmd_adopt "$@" ;;
     cleanup)  cmd_cleanup "$@" ;;
     digest)   cmd_digest "$@" ;;
     prompt)   cmd_prompt "$@" ;;
