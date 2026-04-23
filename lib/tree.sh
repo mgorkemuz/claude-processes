@@ -69,6 +69,49 @@ cc_process_info() {
   printf '%s\t%s\t%s\t%s\t%s\n' "$pid" "$cmd" "$rss" "$etime" "$ports"
 }
 
+# cc_fd_count <pid>
+# Print the number of open file descriptors held by <pid>. Zero if lsof is
+# unavailable or the process is dead. Useful as a leak indicator — a Claude
+# tool run that left a hundred sockets open is suspicious.
+cc_fd_count() {
+  local pid="$1"
+  [ -z "$pid" ] && { echo 0; return; }
+  command -v lsof >/dev/null 2>&1 || { echo 0; return; }
+  lsof -p "$pid" 2>/dev/null | awk 'NR>1 {n++} END {print n+0}'
+}
+
+# cc_label_devserver <command> [ports_csv]
+# Identify common dev servers from their command line; if ports are given,
+# emit a "Label :<port>" string (or just "Label" when no port).
+# Returns empty for unrecognized commands.
+cc_label_devserver() {
+  local cmd="$1" ports="${2:-}"
+  local label=""
+  case "$cmd" in
+    *"next-server"*|*"next dev"*|*"next start"*) label="Next.js" ;;
+    *"nuxt dev"*|*"nuxt-dev"*)                    label="Nuxt" ;;
+    *"vite"*)                                     label="Vite" ;;
+    *"webpack serve"*|*"webpack-dev-server"*)     label="Webpack" ;;
+    *"astro dev"*)                                label="Astro" ;;
+    *"remix vite"*|*"remix dev"*)                 label="Remix" ;;
+    *"uvicorn"*)                                  label="Uvicorn" ;;
+    *"gunicorn"*)                                 label="Gunicorn" ;;
+    *"http.server"*)                              label="http.server" ;;
+    *"rails server"*|*"rails s "*)                label="Rails" ;;
+    *"bun run dev"*|*"bun dev"*)                  label="Bun dev" ;;
+    *"deno run"*"--watch"*)                       label="Deno" ;;
+    *"jekyll serve"*)                             label="Jekyll" ;;
+    *"hugo server"*)                              label="Hugo" ;;
+  esac
+  [ -z "$label" ] && return 0
+  if [ -n "$ports" ]; then
+    local first="${ports%%,*}"
+    echo "$label :$first"
+  else
+    echo "$label"
+  fi
+}
+
 # cc_listening_ports <pid>
 # Print comma-separated listening TCP ports held by <pid>. Empty if none or
 # if lsof is unavailable.

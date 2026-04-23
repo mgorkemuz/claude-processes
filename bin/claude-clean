@@ -88,12 +88,19 @@ cc_print_process_line() {
   [ -z "$info" ] && return 0
   local cmd rss etime ports
   IFS=$'\t' read -r _ cmd rss etime ports <<< "$info"
-  # Truncate command to 40 chars for readability.
-  if [ "${#cmd}" -gt 40 ]; then cmd="${cmd:0:37}..."; fi
-  local port_str=""
-  [ -n "$ports" ] && port_str="port $ports"
-  printf '  %-7s %-40s %-12s %-6s %s\n' \
-    "$pid" "$cmd" "$port_str" "$(cc_format_rss "$rss")" "$(cc_format_etime "$etime")"
+  if [ "${#cmd}" -gt 32 ]; then cmd="${cmd:0:29}..."; fi
+
+  # Port/label column: prefer a recognised dev-server label over raw port.
+  local label=""
+  if [ -n "$ports" ]; then
+    label=$(cc_label_devserver "$cmd" "$ports")
+    [ -z "$label" ] && label="port $ports"
+  fi
+
+  local fd; fd=$(cc_fd_count "$pid")
+  printf '  %-7s %-32s %-20s %-7s %-5s FD %s\n' \
+    "$pid" "$cmd" "$label" \
+    "$(cc_format_rss "$rss")" "$(cc_format_etime "$etime")" "$fd"
 }
 
 # ---- subcommand: list -------------------------------------------------------

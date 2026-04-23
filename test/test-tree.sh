@@ -69,6 +69,29 @@ ok "cc_format_rss buckets"
 [ "$(cc_format_etime 01-00:00:00)" = "1d" ] || fail "cc_format_etime 1d"
 ok "cc_format_etime buckets"
 
+# cc_fd_count: integer for live pid (bash shell itself has open fds), 0 for dead
+fd=$(cc_fd_count $$)
+case "$fd" in
+  ''|*[!0-9]*) fail "cc_fd_count returned non-integer: '$fd'" ;;
+esac
+[ "$fd" -gt 0 ] || fail "cc_fd_count returned zero for live pid $$"
+ok "cc_fd_count $$ = $fd"
+[ "$(cc_fd_count 99999999)" = "0" ] || fail "cc_fd_count dead pid should be 0"
+ok "cc_fd_count dead pid returns 0"
+
+# cc_label_devserver
+label=$(cc_label_devserver "next dev -p 3000" 3000)
+case "$label" in
+  *Next.js*3000*) ok "cc_label_devserver Next.js → $label" ;;
+  *) fail "cc_label_devserver 'next dev' unexpected: '$label'" ;;
+esac
+label=$(cc_label_devserver "vite" 5173)
+case "$label" in *Vite*5173*) ok "cc_label_devserver Vite → $label" ;; *) fail "Vite label: '$label'" ;; esac
+label=$(cc_label_devserver "uvicorn app:api --port 8000" 8000)
+case "$label" in *Uvicorn*8000*) ok "cc_label_devserver Uvicorn → $label" ;; *) fail "Uvicorn label: '$label'" ;; esac
+[ -z "$(cc_label_devserver 'sleep 30')" ] || fail "cc_label_devserver should return empty for 'sleep 30'"
+ok "cc_label_devserver returns empty for unknown commands"
+
 # cc_kill_tree: whole tree dies
 cc_kill_tree "$PARENT_PID" 2 || fail "cc_kill_tree returned non-zero"
 sleep 0.2
