@@ -55,19 +55,19 @@ Each subcommand supports `--help`.
 
 ## Slash commands (from inside Claude)
 
-Invoke with the namespaced form `/cc-procs:<name>` (TAB-completes after `/claude-p`).
+Invoke with the namespaced form `/shepherd:<name>` (TAB-completes after `/claude-p`).
 
 | Command | Behavior |
 |---|---|
-| `/cc-procs:processes [args]` | Run `list`, narrate notable findings. |
-| `/cc-procs:status`           | One-line sessions/processes/orphans count. |
-| `/cc-procs:stash [args]`     | Default `--current`. Report what was stashed + RAM freed. |
-| `/cc-procs:stashes`          | Show all saved snapshots (table). |
-| `/cc-procs:unstash [stash_id]`| Default `--latest --attach`. Respawn in original cwd, attach to current session. |
-| `/cc-procs:adopt <pid> [label]`| Register an externally-spawned pid as tracked (survived a Claude restart, started outside Claude, etc). |
-| `/cc-procs:rm [args]`        | Default `--latest`. Delete a stash without resuming. |
-| `/cc-procs:kill [args]`      | Terminate by pid / `--session` / `--orphans`. |
-| `/cc-procs:cleanup [args]`   | Default `--dry-run --older-than 24h`. |
+| `/shepherd:processes [args]` | Run `list`, narrate notable findings. |
+| `/shepherd:status`           | One-line sessions/processes/orphans count. |
+| `/shepherd:stash [args]`     | Default `--current`. Report what was stashed + RAM freed. |
+| `/shepherd:stashes`          | Show all saved snapshots (table). |
+| `/shepherd:unstash [stash_id]`| Default `--latest --attach`. Respawn in original cwd, attach to current session. |
+| `/shepherd:adopt <pid> [label]`| Register an externally-spawned pid as tracked (survived a Claude restart, started outside Claude, etc). |
+| `/shepherd:rm [args]`        | Default `--latest`. Delete a stash without resuming. |
+| `/shepherd:kill [args]`      | Terminate by pid / `--session` / `--orphans`. |
+| `/shepherd:cleanup [args]`   | Default `--dry-run --older-than 24h`. |
 
 ## Config
 
