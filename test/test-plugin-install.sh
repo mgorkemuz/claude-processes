@@ -32,7 +32,7 @@ done
 ok "manifest required fields (name, version, description) present"
 
 name=$(jq -r '.name' "$MANIFEST")
-[ "$name" = "cc-shepherd" ] || fail "manifest.name expected 'shepherd', got '$name'"
+[ "$name" = "shepherd" ] || fail "manifest.name expected 'shepherd', got '$name'"
 ok "manifest.name = shepherd"
 
 version=$(jq -r '.version' "$MANIFEST")

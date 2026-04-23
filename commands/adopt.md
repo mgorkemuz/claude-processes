@@ -12,4 +12,4 @@ Use cases to surface to the user:
 - A process started in another terminal that the user now wants to stash/track from here.
 - A respawned stash from a pre-0.5.1 build where `--attach` wasn't the default.
 
-After adoption, the pid shows up in `/cc-shepherd:processes` and can be stash'd, killed, or cleanup-filtered like any natively-tracked process.
+After adoption, the pid shows up in `/shepherd:processes` and can be stash'd, killed, or cleanup-filtered like any natively-tracked process.
