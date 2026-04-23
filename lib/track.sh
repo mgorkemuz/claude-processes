@@ -35,6 +35,24 @@ cc_iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
+# cc_current_session_file — path of the "authoritative current session" marker.
+# Hooks write the session_id here every time they fire, so cc_respawn --attach
+# and other off-hook callers can find the current session without guessing via
+# PPID chain walks.
+cc_current_session_file() { echo "$CC_STATE_DIR/.current-session"; }
+
+cc_touch_current() {
+  local sid="$1"
+  [ -z "$sid" ] && return 0
+  mkdir -p "$CC_STATE_DIR" 2>/dev/null
+  printf '%s\n' "$sid" > "$(cc_current_session_file)" 2>/dev/null || true
+}
+
+cc_read_current() {
+  local f; f=$(cc_current_session_file)
+  [ -f "$f" ] && head -1 "$f" 2>/dev/null
+}
+
 # cc_with_lock <file> <command...>
 # Run command while holding an exclusive lock on <file>.lock. Uses flock if
 # present, otherwise a mkdir-based fallback (portable to stock macOS).

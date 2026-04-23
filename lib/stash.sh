@@ -277,6 +277,9 @@ cc_respawn() {
     return 1
   fi
 
+  # Exported so cmd_unstash can report attach truthfully. Empty if attach
+  # was requested but no session could be resolved.
+  CC_RESPAWN_ATTACHED_TO=""
   if [ "$mode" = "--attach" ]; then
     local cur; cur=$(cc_discover_current_session)
     if [ -n "$cur" ]; then
@@ -288,7 +291,9 @@ cc_respawn() {
       while IFS= read -r d; do
         [ -n "$d" ] && desc+=("$d")
       done < <(cc_descendants "$new_pid")
-      cc_session_add_spawn "$cur" "$new_pid" "$cmd" "" ${desc[@]+"${desc[@]}"} 2>/dev/null || true
+      if cc_session_add_spawn "$cur" "$new_pid" "$cmd" "" ${desc[@]+"${desc[@]}"} 2>/dev/null; then
+        CC_RESPAWN_ATTACHED_TO="$cur"
+      fi
     fi
   fi
 
@@ -298,9 +303,21 @@ cc_respawn() {
 }
 
 # cc_discover_current_session
-# Walk up $PPID chain until we hit a pid that's a tracked claude_pid.
-# Falls back to the most-recently-modified live tracked session.
+# Returns the active Claude session id. Priority:
+#   1. The authoritative marker file written by hook handlers on every
+#      fire (cc_touch_current). Reliable because Claude Code hands us
+#      session_id directly in the hook event payload.
+#   2. PPID chain walk — for cases where cc_respawn is invoked from a
+#      context where hooks haven't fired recently (unlikely).
+#   3. Most-recently-modified live session file (last-resort fallback).
 cc_discover_current_session() {
+  # 1) hook-written marker
+  local from_file; from_file=$(cc_read_current)
+  if [ -n "$from_file" ] && [ -f "$(cc_session_file "$from_file")" ]; then
+    echo "$from_file"; return 0
+  fi
+
+  # 2) PPID chain walk
   local p=$$ depth=0
   while [ "$p" -gt 1 ] && [ "$depth" -lt 10 ]; do
     local s
@@ -314,7 +331,7 @@ cc_discover_current_session() {
     depth=$((depth + 1))
   done
 
-  # Fallback: most recently modified live session file
+  # 3) Most-recently-modified live session file
   local f best_m="" best_s=""
   while IFS= read -r s; do
     [ -z "$s" ] && continue

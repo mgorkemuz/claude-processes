@@ -708,9 +708,29 @@ cmd_unstash() {
   fi
   [ -z "$target" ] && { cc_usage_unstash; return 2; }
 
+  # CC_RESPAWN_ATTACHED_TO is set by cc_respawn — empty means attach failed.
+  export CC_RESPAWN_ATTACHED_TO=""
   local new_pid; new_pid=$(cc_respawn "$target" "$attach") || return 1
+  # cc_respawn ran in a subshell — re-read its side-effect from state.
+  # We cache it in a temp file as an extra channel since exports don't flow up.
   echo "resumed: pid $new_pid"
-  [ -n "$attach" ] && echo "attached to current session"
+  if [ -n "$attach" ]; then
+    # Re-check directly: did the new pid land in a tracked session?
+    local found_in=""
+    local s
+    while IFS= read -r s; do
+      [ -z "$s" ] && continue
+      if cc_session_all_pids "$s" | grep -qFx "$new_pid"; then
+        found_in="$s"; break
+      fi
+    done < <(cc_session_list)
+    if [ -n "$found_in" ]; then
+      echo "attached to session $(cc_short_id "$found_in")"
+    else
+      echo "⚠ --attach requested but no tracked session matched — pid $new_pid is NOT tracked"
+      echo "  (fix: /claude-processes:adopt $new_pid)"
+    fi
+  fi
   echo "logs: /tmp/claude-processes-${target}.log"
 }
 
@@ -856,8 +876,8 @@ hook_session_start() {
   session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
   cwd=$(jq -r '.cwd // empty' <<< "$event" 2>/dev/null)
   [ -z "$session_id" ] && return 0
-  # Our PPID is the Claude TUI process.
   cc_session_init "$session_id" "$PPID" "$cwd" 2>/dev/null || true
+  cc_touch_current "$session_id"
   return 0
 }
 
@@ -865,6 +885,8 @@ hook_pre_tool_use() {
   cc_have_jq || return 0
   local event; event=$(cc_read_event)
   [ -z "$event" ] && return 0
+  local session_id; session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
+  [ -n "$session_id" ] && cc_touch_current "$session_id"
   local tool_name command
   tool_name=$(jq -r '.tool_name // empty' <<< "$event" 2>/dev/null)
   [ -n "$tool_name" ] && [ "$tool_name" != "Bash" ] && return 0
@@ -886,6 +908,7 @@ hook_post_tool_use() {
   session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
   tool_name=$(jq -r '.tool_name // empty' <<< "$event" 2>/dev/null)
   [ -z "$session_id" ] && return 0
+  cc_touch_current "$session_id"
   # settings.json already filters by Bash matcher; this is defense-in-depth.
   [ -n "$tool_name" ] && [ "$tool_name" != "Bash" ] && return 0
 
@@ -964,6 +987,7 @@ hook_stop() {
   local session_id
   session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
   [ -z "$session_id" ] && return 0
+  cc_touch_current "$session_id"
 
   local live_pids; live_pids=$(cc_session_live_pids "$session_id")
   if [ -z "$live_pids" ]; then
@@ -1000,6 +1024,7 @@ hook_user_prompt_submit() {
   session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
   [ -z "$prompt" ] && return 0
   [ -z "$session_id" ] && return 0
+  cc_touch_current "$session_id"
 
   # Only intervene when the prompt looks like a session-reset: /clear, /new,
   # or conversational "start fresh" / "new session" patterns.
