@@ -880,6 +880,42 @@ hook_session_start() {
   [ -z "$session_id" ] && return 0
   cc_session_init "$session_id" "$PPID" "$cwd" 2>/dev/null || true
   cc_touch_current "$session_id"
+
+  # Opt-in: auto-clean orphans from previous Claude instances that crashed
+  # without firing Stop. Default false — user might intentionally keep a
+  # dev server alive across Claude restarts. Enable with:
+  #   jq '.kill.auto_orphans_on_session_start = true' \
+  #     ~/.claude/.shepherd/config.json > /tmp/c && mv /tmp/c ~/.claude/.shepherd/config.json
+  local auto_kill
+  auto_kill=$(cc_config_get '.kill.auto_orphans_on_session_start' false)
+  if [ "$auto_kill" = "true" ]; then
+    local killed_lines=""
+    local killed_count=0
+    local s
+    while IFS= read -r s; do
+      [ -z "$s" ] && continue
+      [ "$s" = "$session_id" ] && continue
+      local cp; cp=$(cc_session_claude_pid "$s")
+      cc_is_claude_alive "$cp" && continue
+      local p
+      while IFS= read -r p; do
+        cc_is_alive "$p" || continue
+        local ps_cmd; ps_cmd=$(ps -o command= -p "$p" 2>/dev/null | head -c 60 | sed 's/^ *//')
+        cc_kill_tree "$p" 1 2>/dev/null || true
+        cc_history_append killed "$s" "$p" "" "auto-kill-on-session-start" "" 2>/dev/null || true
+        killed_lines+="  pid $p  $ps_cmd  (session ${s:0:6})"$'\n'
+        killed_count=$((killed_count + 1))
+      done < <(cc_session_all_pids "$s")
+      [ -z "$(cc_session_live_pids "$s")" ] && cc_session_delete "$s"
+    done < <(cc_session_list)
+
+    if [ "$killed_count" -gt 0 ]; then
+      {
+        printf 'shepherd auto-cleanup: killed %d orphan tree(s) from previous session(s):\n' "$killed_count"
+        printf '%s' "$killed_lines"
+      } | cc_emit_context SessionStart
+    fi
+  fi
   return 0
 }
 

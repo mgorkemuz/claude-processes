@@ -19,7 +19,7 @@ cc_config_default() {
     "env_allowlist": ["PATH", "NODE_ENV", "PORT", "NODE_OPTIONS"],
     "env_allowlist_prefix": ["X_", "APP_"]
   },
-  "kill": { "grace_seconds": 3, "safe_pgid_leader": false },
+  "kill": { "grace_seconds": 3, "safe_pgid_leader": false, "auto_orphans_on_session_start": false },
   "notifications": { "macos_osascript": false },
   "history": { "max_bytes": 1048576 }
 }
