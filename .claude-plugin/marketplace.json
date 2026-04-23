@@ -1,4 +1,6 @@
 {
+  "name": "shepherd",
+  "owner": { "name": "mgorkemuz" },
   "version": "1.0.0",
   "plugins": [
     {

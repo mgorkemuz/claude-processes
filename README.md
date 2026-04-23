@@ -12,6 +12,11 @@ Upstream issues tracking this: [anthropics/claude-code#43944](https://github.com
 
 ## Install
 
+```
+/plugin marketplace add mgorkemuz/claude-code-shepherd
+/plugin install shepherd@shepherd
+```
+
 From a local clone for development:
 
 ```sh
