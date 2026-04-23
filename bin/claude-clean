@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+# claude-clean — inspect and terminate processes spawned by Claude Code's
+# Bash tool. See README for the full story.
+set -u
+
+CC_VERSION="0.1.0"
+
+# ---- library resolution ------------------------------------------------------
+
+cc_resolve_self() {
+  local s="$1"
+  # Follow symlinks iteratively (macOS readlink has no -f).
+  while [ -L "$s" ]; do
+    local target; target=$(readlink "$s")
+    case "$target" in
+      /*) s="$target" ;;
+      *)  s="$(dirname "$s")/$target" ;;
+    esac
+  done
+  ( cd "$(dirname "$s")" && pwd )
+}
+
+cc_find_root() {
+  [ -n "${CC_ROOT:-}" ] && [ -d "$CC_ROOT/lib" ] && { echo "$CC_ROOT"; return; }
+  local bindir; bindir=$(cc_resolve_self "$0")
+  local candidates=(
+    "$bindir/.."
+    "$bindir/../share/claude-clean"
+    "$HOME/.local/share/claude-clean"
+    "/usr/local/share/claude-clean"
+    "/opt/homebrew/share/claude-clean"
+  )
+  local d
+  for d in "${candidates[@]}"; do
+    if [ -f "$d/lib/detect.sh" ]; then ( cd "$d" && pwd ); return; fi
+  done
+  return 1
+}
+
+CC_ROOT=$(cc_find_root) || {
+  echo "claude-clean: cannot locate lib/ directory" >&2
+  exit 1
+}
+
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/detect.sh"
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/tree.sh"
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/kill.sh"
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/track.sh"
+
+# ---- helpers ----------------------------------------------------------------
+
+cc_short_id() {
+  # First 6 chars of a session id — readable in output.
+  printf '%s' "${1:0:6}"
+}
+
+# Collect: for a given session, every alive PID (union of tracked wrappers,
+# tracked child PIDs, and the descendants of each). Output one PID per line,
+# deduplicated.
+cc_session_live_pids() {
+  local id="$1"
+  local roots
+  roots=$(cc_session_all_pids "$id")
+  [ -z "$roots" ] && return 0
+  {
+    local p
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      if cc_is_alive "$p"; then echo "$p"; fi
+      cc_descendants "$p"
+    done <<< "$roots"
+  } | awk 'NF && !seen[$0]++'
+}
+
+# Shorter printer used by `list` — one indented line per process.
+cc_print_process_line() {
+  local pid="$1"
+  local info
+  info=$(cc_process_info "$pid")
+  [ -z "$info" ] && return 0
+  local cmd rss etime ports
+  IFS=$'\t' read -r _ cmd rss etime ports <<< "$info"
+  # Truncate command to 40 chars for readability.
+  if [ "${#cmd}" -gt 40 ]; then cmd="${cmd:0:37}..."; fi
+  local port_str=""
+  [ -n "$ports" ] && port_str="port $ports"
+  printf '  %-7s %-40s %-12s %-6s %s\n' \
+    "$pid" "$cmd" "$port_str" "$(cc_format_rss "$rss")" "$(cc_format_etime "$etime")"
+}
+
+# ---- subcommand: list -------------------------------------------------------
+
+cmd_list() {
+  local only_session="" only_orphans=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session) only_session="$2"; shift 2 ;;
+      --session=*) only_session="${1#--session=}"; shift ;;
+      --orphans) only_orphans=1; shift ;;
+      -h|--help) cc_usage_list; return 0 ;;
+      *) echo "claude-clean list: unknown arg: $1" >&2; return 2 ;;
+    esac
+  done
+
+  cc_state_init
+  cc_have_jq || { echo "claude-clean: jq is required" >&2; return 1; }
+
+  local any_output=0
+  local sessions
+  if [ -n "$only_session" ]; then
+    sessions="$only_session"
+  else
+    sessions=$(cc_session_list)
+  fi
+
+  if [ "$only_orphans" -eq 0 ]; then
+    local id
+    while IFS= read -r id; do
+      [ -z "$id" ] && continue
+      local claude_pid cwd
+      claude_pid=$(cc_session_claude_pid "$id")
+      cwd=$(cc_session_cwd "$id")
+      # Only show sessions whose claude is alive (orphans go in the orphan block)
+      if cc_is_claude_alive "$claude_pid"; then
+        local live_pids
+        live_pids=$(cc_session_live_pids "$id")
+        local state_hint="active"
+        # If no wrapper currently alive, report the session as idle with age
+        # of latest spawn (roughly: etime of oldest live tracked pid).
+        if [ -n "$live_pids" ]; then
+          # If any wrapper signature is in ps with this claude as PPID → active
+          if [ -z "$(cc_find_wrappers_for_claude "$claude_pid")" ]; then
+            state_hint="idle"
+          fi
+        fi
+        printf 'SESSION  %s  %s  (claude pid %s, %s)\n' \
+          "$(cc_short_id "$id")" "${cwd:-?}" "$claude_pid" "$state_hint"
+        if [ -n "$live_pids" ]; then
+          local p
+          while IFS= read -r p; do cc_print_process_line "$p"; done <<< "$live_pids"
+        else
+          echo "  (no background processes)"
+        fi
+        echo
+        any_output=1
+      fi
+    done <<< "$sessions"
+  fi
+
+  # Orphans: sessions whose claude_pid is NOT alive but which still have live
+  # tracked PIDs.
+  local orphan_lines=""
+  local id
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    local claude_pid
+    claude_pid=$(cc_session_claude_pid "$id")
+    if ! cc_is_claude_alive "$claude_pid"; then
+      local live_pids
+      live_pids=$(cc_session_live_pids "$id")
+      if [ -n "$live_pids" ]; then
+        local p
+        while IFS= read -r p; do
+          local line; line=$(cc_print_process_line "$p")
+          [ -n "$line" ] && orphan_lines+="$line"$'\n'
+        done <<< "$live_pids"
+      fi
+    fi
+  done <<< "$sessions"
+
+  if [ -n "$orphan_lines" ]; then
+    echo "ORPHANS  (no live claude ancestor)"
+    printf '%s' "$orphan_lines"
+    any_output=1
+  elif [ "$only_orphans" -eq 1 ]; then
+    echo "No orphaned processes."
+    any_output=1
+  fi
+
+  if [ "$any_output" -eq 0 ]; then
+    echo "No tracked Claude-spawned processes."
+  fi
+}
+
+cc_usage_list() {
+  cat <<'EOF'
+Usage: claude-clean list [--session <id>] [--orphans]
+
+Show Claude-spawned background processes, grouped by session. Orphans are
+processes whose originating Claude process is no longer alive.
+EOF
+}
+
+# ---- subcommand: status -----------------------------------------------------
+
+cmd_status() {
+  cc_state_init
+  cc_have_jq || { echo "claude-clean: jq is required" >&2; return 1; }
+
+  local sessions=0 active=0 procs=0 orphans=0
+  local id
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    sessions=$((sessions + 1))
+    local claude_pid live_pids count
+    claude_pid=$(cc_session_claude_pid "$id")
+    live_pids=$(cc_session_live_pids "$id")
+    count=$(printf '%s\n' "$live_pids" | awk 'NF' | wc -l | awk '{print $1}')
+    if cc_is_claude_alive "$claude_pid"; then
+      active=$((active + 1))
+      procs=$((procs + count))
+    else
+      orphans=$((orphans + count))
+    fi
+  done < <(cc_session_list)
+
+  printf '%d sessions (%d active), %d processes, %d orphans\n' \
+    "$sessions" "$active" "$procs" "$orphans"
+}
+
+# ---- subcommand: kill -------------------------------------------------------
+
+cmd_kill() {
+  local mode="pid" target="" grace=3
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session) mode="session"; target="$2"; shift 2 ;;
+      --session=*) mode="session"; target="${1#--session=}"; shift ;;
+      --orphans) mode="orphans"; shift ;;
+      --grace) grace="$2"; shift 2 ;;
+      -h|--help) cc_usage_kill; return 0 ;;
+      -*) echo "claude-clean kill: unknown flag: $1" >&2; return 2 ;;
+      *) target="$1"; shift ;;
+    esac
+  done
+
+  cc_state_init
+  cc_have_jq || { echo "claude-clean: jq is required" >&2; return 1; }
+
+  local rc=0
+  case "$mode" in
+    pid)
+      [ -z "$target" ] && { cc_usage_kill; return 2; }
+      if ! cc_is_alive "$target"; then
+        echo "pid $target is not alive"
+        return 0
+      fi
+      echo "killing $target + descendants..."
+      cc_kill_tree "$target" "$grace" || rc=1
+      ;;
+    session)
+      [ -z "$target" ] && { cc_usage_kill; return 2; }
+      local roots; roots=$(cc_session_all_pids "$target")
+      if [ -z "$roots" ]; then
+        echo "no tracked processes for session $target"
+        return 0
+      fi
+      local p
+      while IFS= read -r p; do
+        cc_is_alive "$p" || continue
+        echo "killing $p + descendants..."
+        cc_kill_tree "$p" "$grace" || rc=1
+      done <<< "$roots"
+      # If everything is gone, drop the tracking file.
+      if [ -z "$(cc_session_live_pids "$target")" ]; then
+        cc_session_delete "$target"
+      fi
+      ;;
+    orphans)
+      local id
+      while IFS= read -r id; do
+        [ -z "$id" ] && continue
+        local claude_pid; claude_pid=$(cc_session_claude_pid "$id")
+        cc_is_claude_alive "$claude_pid" && continue
+        local roots; roots=$(cc_session_all_pids "$id")
+        local p
+        while IFS= read -r p; do
+          cc_is_alive "$p" || continue
+          echo "killing orphan $p + descendants (session $(cc_short_id "$id"))..."
+          cc_kill_tree "$p" "$grace" || rc=1
+        done <<< "$roots"
+        [ -z "$(cc_session_live_pids "$id")" ] && cc_session_delete "$id"
+      done < <(cc_session_list)
+      ;;
+  esac
+  return $rc
+}
+
+cc_usage_kill() {
+  cat <<'EOF'
+Usage:
+  claude-clean kill <pid>            Kill one process and its descendants.
+  claude-clean kill --session <id>   Kill all tracked processes for a session.
+  claude-clean kill --orphans        Kill every orphaned process tree.
+
+Options:
+  --grace <seconds>  Seconds to wait after SIGTERM before SIGKILL (default 3).
+EOF
+}
+
+# ---- subcommand: prompt (internal, called by Stop hook) ---------------------
+
+cmd_prompt() {
+  local id="$1"
+  [ -z "$id" ] && { echo "claude-clean prompt: session id required" >&2; return 2; }
+  cc_state_init
+  cc_have_jq || { echo "claude-clean: jq is required" >&2; return 1; }
+
+  local live_pids; live_pids=$(cc_session_live_pids "$id")
+  if [ -z "$live_pids" ]; then
+    cc_session_delete "$id"
+    return 0
+  fi
+
+  echo "Claude session $(cc_short_id "$id") ended. These processes are still running:"
+  local p
+  while IFS= read -r p; do cc_print_process_line "$p"; done <<< "$live_pids"
+  echo
+  # Read from /dev/tty — hook stdin is attached to Claude.
+  if [ -r /dev/tty ]; then
+    printf 'Kill them all? [y/N] ' > /dev/tty
+    local ans
+    read -r ans < /dev/tty
+    case "$ans" in
+      y|Y|yes|YES) cmd_kill --session "$id" ;;
+      *) echo "leaving them alive. Run: claude-clean list    to see them later." ;;
+    esac
+  else
+    echo "(no tty — skipping confirmation; run 'claude-clean kill --session $id' to terminate)"
+  fi
+}
+
+# ---- subcommand: hook (entry point for Claude Code hooks) -------------------
+#
+# Invoked by the small wrapper scripts under hooks/. Reads a JSON event from
+# stdin and updates tracking state. All errors are swallowed — a failing hook
+# must never block Claude.
+
+cmd_hook() {
+  local sub="${1:-}"; [ $# -gt 0 ] && shift
+  case "$sub" in
+    session-start) hook_session_start "$@" ;;
+    post-tool-use) hook_post_tool_use "$@" ;;
+    stop)          hook_stop "$@" ;;
+    '') echo "claude-clean hook: subcommand required (session-start|post-tool-use|stop)" >&2; return 2 ;;
+    *) echo "claude-clean hook: unknown sub: $sub" >&2; return 2 ;;
+  esac
+}
+
+# Read event JSON from stdin, deadline 2s so a stuck hook can't hang Claude.
+cc_read_event() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 cat
+  else
+    # bash has a read-with-timeout; use it as a fallback
+    local line out=""
+    while IFS= read -r -t 2 line; do out+="$line"$'\n'; done
+    printf '%s' "$out"
+  fi
+}
+
+hook_session_start() {
+  cc_have_jq || return 0
+  local event; event=$(cc_read_event)
+  [ -z "$event" ] && return 0
+  local session_id cwd
+  session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
+  cwd=$(jq -r '.cwd // empty' <<< "$event" 2>/dev/null)
+  [ -z "$session_id" ] && return 0
+  # Our PPID is the Claude TUI process.
+  cc_session_init "$session_id" "$PPID" "$cwd" 2>/dev/null || true
+  return 0
+}
+
+hook_post_tool_use() {
+  cc_have_jq || return 0
+  local event; event=$(cc_read_event)
+  [ -z "$event" ] && return 0
+  local session_id tool_name
+  session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
+  tool_name=$(jq -r '.tool_name // empty' <<< "$event" 2>/dev/null)
+  [ -z "$session_id" ] && return 0
+  # settings.json already filters by Bash matcher; this is defense-in-depth.
+  [ -n "$tool_name" ] && [ "$tool_name" != "Bash" ] && return 0
+
+  # Resolve claude_pid. Prefer state file (set at SessionStart); fall back to
+  # this hook's PPID if the session wasn't initialised.
+  local claude_pid
+  claude_pid=$(cc_session_claude_pid "$session_id" 2>/dev/null)
+  [ -z "$claude_pid" ] && claude_pid="$PPID"
+
+  # If the session file doesn't exist yet (user installed mid-session), create
+  # it lazily so PostToolUse can proceed.
+  if ! [ -f "$(cc_session_file "$session_id")" ]; then
+    local cwd; cwd=$(jq -r '.cwd // empty' <<< "$event" 2>/dev/null)
+    cc_session_init "$session_id" "$claude_pid" "$cwd" 2>/dev/null || return 0
+  fi
+
+  cc_is_claude_alive "$claude_pid" || return 0
+
+  local existing; existing=$(cc_session_all_pids "$session_id" | sort -u)
+  local command
+  command=$(jq -r '.tool_input.command // ""' <<< "$event" 2>/dev/null)
+  # Truncate very long commands — state file stays readable.
+  [ "${#command}" -gt 200 ] && command="${command:0:197}..."
+
+  local kid
+  while IFS= read -r kid; do
+    [ -z "$kid" ] && continue
+    # Skip if already tracked (idempotent across repeated tool calls).
+    if printf '%s\n' "$existing" | grep -qFx "$kid"; then continue; fi
+    # Skip if the process is already gone by the time we got here.
+    cc_is_alive "$kid" || continue
+    # Skip the hook's own process tree — defensive; shouldn't happen since
+    # hook runs synchronously under Claude, not as a descendant of a wrapper.
+    [ "$kid" = "$$" ] && continue
+    cc_session_add_spawn "$session_id" "$kid" "$command" "" 2>/dev/null || true
+  done < <(cc_descendants "$claude_pid")
+
+  return 0
+}
+
+hook_stop() {
+  cc_have_jq || return 0
+  local event; event=$(cc_read_event)
+  [ -z "$event" ] && return 0
+  local session_id
+  session_id=$(jq -r '.session_id // empty' <<< "$event" 2>/dev/null)
+  [ -z "$session_id" ] && return 0
+
+  local live_pids; live_pids=$(cc_session_live_pids "$session_id")
+  if [ -z "$live_pids" ]; then
+    cc_session_delete "$session_id"
+    return 0
+  fi
+
+  # Stop hooks don't have TTY access in Claude Code, so we print a summary
+  # and the exact kill command instead of prompting. Claude renders stdout.
+  echo ""
+  echo "[claude-clean] Session ended with background processes still running:"
+  local p
+  while IFS= read -r p; do cc_print_process_line "$p"; done <<< "$live_pids"
+  echo ""
+  echo "To kill them:   claude-clean kill --session $session_id"
+  echo "To see others:  claude-clean list"
+  return 0
+}
+
+# ---- subcommand: sessions (diagnostic) --------------------------------------
+
+cmd_sessions() {
+  cc_state_init
+  local id
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    local pid; pid=$(cc_session_claude_pid "$id")
+    local alive="dead"
+    cc_is_claude_alive "$pid" && alive="alive"
+    printf '%s  claude=%s (%s)  %s\n' "$id" "$pid" "$alive" "$(cc_session_cwd "$id")"
+  done < <(cc_session_list)
+}
+
+# ---- top-level dispatch -----------------------------------------------------
+
+cc_usage() {
+  cat <<EOF
+claude-clean $CC_VERSION — inspect and kill Claude-spawned background processes.
+
+Commands:
+  list [--session <id>] [--orphans]   Show tracked processes.
+  status                              One-line summary.
+  kill <pid>                          Terminate a pid + descendants.
+  kill --session <id>                 Terminate everything a session spawned.
+  kill --orphans                      Terminate all orphaned trees.
+  sessions                            List tracked session IDs.
+  prompt <session_id>                 Print kill summary for one session.
+  hook <event>                        Internal; called by Claude Code hooks.
+  version                             Print version.
+
+Files:
+  Tracking state:  ~/.claude/.clean/<session>.json
+  Hook scripts:    ~/.claude/hooks/claude-clean/
+EOF
+}
+
+main() {
+  [ $# -eq 0 ] && { cc_usage; exit 0; }
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)     cmd_list "$@" ;;
+    status)   cmd_status "$@" ;;
+    kill)     cmd_kill "$@" ;;
+    prompt)   cmd_prompt "$@" ;;
+    hook)     cmd_hook "$@" ;;
+    sessions) cmd_sessions "$@" ;;
+    version|-v|--version) echo "claude-clean $CC_VERSION" ;;
+    help|-h|--help) cc_usage ;;
+    *) echo "claude-clean: unknown command: $cmd" >&2; cc_usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"
