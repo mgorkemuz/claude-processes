@@ -1,6 +1,6 @@
 ---
 description: List background processes Claude has spawned across all tracked sessions.
-allowed-tools: Bash(claude-processes list:*), Bash(claude-processes status:*)
+allowed-tools: Bash(claude-processes:*)
 ---
 
 Run `claude-processes list $ARGUMENTS` and report what's currently tracked, grouped by Claude session. Highlight:
