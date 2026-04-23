@@ -280,7 +280,15 @@ cc_respawn() {
   if [ "$mode" = "--attach" ]; then
     local cur; cur=$(cc_discover_current_session)
     if [ -n "$cur" ]; then
-      cc_session_add_spawn "$cur" "$new_pid" "$cmd" "" "$new_pid" 2>/dev/null || true
+      # Give the spawned command a brief moment to fork descendants
+      # (npm → node → next-server) before we snapshot the tree.
+      sleep 0.2
+      local desc=()
+      local d
+      while IFS= read -r d; do
+        [ -n "$d" ] && desc+=("$d")
+      done < <(cc_descendants "$new_pid")
+      cc_session_add_spawn "$cur" "$new_pid" "$cmd" "" ${desc[@]+"${desc[@]}"} 2>/dev/null || true
     fi
   fi
 
