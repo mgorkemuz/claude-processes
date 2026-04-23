@@ -282,6 +282,26 @@ cc_respawn() {
   CC_RESPAWN_ATTACHED_TO=""
   if [ "$mode" = "--attach" ]; then
     local cur; cur=$(cc_discover_current_session)
+
+    # Last-resort fallback: if no session could be discovered (no hook has
+    # fired recently, PPID walk didn't match, no live session file), create
+    # a synthetic session using the topmost ancestor pid. Better to have a
+    # tracked pid somewhere than silently drop --attach.
+    if [ -z "$cur" ]; then
+      local top="" p=$$ depth=0
+      while [ "$p" -gt 1 ] && [ "$depth" -lt 10 ]; do
+        top="$p"
+        p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+        [ -z "$p" ] && break
+        depth=$((depth + 1))
+      done
+      if [ -n "$top" ] && [ "$top" -gt 1 ]; then
+        cur="auto-respawn-$(date +%s)-${top}"
+        cc_session_init "$cur" "$top" "$(pwd)" 2>/dev/null
+        cc_touch_current "$cur"
+      fi
+    fi
+
     if [ -n "$cur" ]; then
       # Give the spawned command a brief moment to fork descendants
       # (npm → node → next-server) before we snapshot the tree.
