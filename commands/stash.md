@@ -8,4 +8,4 @@ Run `claude-processes stash $ARGUMENTS`. If `$ARGUMENTS` is empty, default to `-
 Report concisely:
 1. Which processes were stashed (commands + stash IDs returned).
 2. The RAM that's now freed and any ports that were released.
-3. Remind the user: `claude-processes unstash <id>` (or the `/resume` slash command) re-launches in the original cwd.
+3. Remind the user: `/claude-processes:unstash` (or `/claude-processes:unstash <id>`) re-launches in the original cwd.

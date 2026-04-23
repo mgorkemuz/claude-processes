@@ -63,7 +63,7 @@ Invoke with the namespaced form `/claude-processes:<name>` (TAB-completes after 
 | `/claude-processes:status`           | One-line sessions/processes/orphans count. |
 | `/claude-processes:stash [args]`     | Default `--current`. Report what was stashed + RAM freed. |
 | `/claude-processes:stashes`          | Show all saved snapshots (table). |
-| `/claude-processes:resume [stash_id]`| Default `--latest`. Respawn in original cwd. |
+| `/claude-processes:unstash [stash_id]`| Default `--latest --attach`. Respawn in original cwd, attach to current session. |
 | `/claude-processes:rm [args]`        | Default `--latest`. Delete a stash without resuming. |
 | `/claude-processes:kill [args]`      | Terminate by pid / `--session` / `--orphans`. |
 | `/claude-processes:cleanup [args]`   | Default `--dry-run --older-than 24h`. |

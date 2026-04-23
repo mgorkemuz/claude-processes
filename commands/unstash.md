@@ -7,4 +7,4 @@ If `$ARGUMENTS` is empty, default to `claude-processes unstash --latest --attach
 
 If the user gave a stash id, default to `claude-processes unstash $ARGUMENTS --attach` unless they explicitly passed `--no-attach` or their args already include `--attach`. Attaching is almost always what you want — without it, `/processes` won't see the respawned pid.
 
-After resume, remind the user the pid is now tracked under this session (so `/claude-processes:processes` will list it and `/claude-processes:stash` can snapshot it again).
+After respawn, remind the user the pid is now tracked under this session (so `/claude-processes:processes` will list it and `/claude-processes:stash` can snapshot it again).
