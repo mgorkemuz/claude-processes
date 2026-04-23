@@ -660,7 +660,8 @@ cmd_stash() {
         cc_is_alive "$p" || continue
         local id; id=$(cc_stash_kill_target "$p") && ids+=("$id")
       done <<< "$roots"
-      cc_session_delete "$target"
+      # Keep the session file — it may still be an active Claude session.
+      # Empty spawned[] is fine; subsequent hooks can re-populate.
       ;;
     current)
       local session; session=$(cc_discover_current_session)
@@ -672,7 +673,8 @@ cmd_stash() {
         cc_is_alive "$p" || continue
         local id; id=$(cc_stash_kill_target "$p") && ids+=("$id")
       done <<< "$roots"
-      cc_session_delete "$session"
+      # Don't delete the session file — Claude is still running it. Without
+      # this, /claude-processes:unstash --attach loses its target session.
       ;;
     *) cc_usage_stash; return 2 ;;
   esac
