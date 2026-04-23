@@ -45,11 +45,11 @@ ok "manifest.version '$version' looks like semver"
 
 jq -e '.hooks' "$HOOKS" >/dev/null || fail "hooks.json has no .hooks root key"
 
-for event in SessionStart PreToolUse PostToolUse Stop; do
+for event in SessionStart PreToolUse PostToolUse UserPromptSubmit Stop; do
   jq -e --arg e "$event" '.hooks[$e] | type == "array" and length > 0' "$HOOKS" >/dev/null \
     || fail "hooks.json missing or empty entry for $event"
 done
-ok "hooks.json registers SessionStart, PreToolUse, PostToolUse, Stop"
+ok "hooks.json registers SessionStart, PreToolUse, PostToolUse, UserPromptSubmit, Stop"
 
 # Pre/PostToolUse should both have a Bash matcher
 for event in PreToolUse PostToolUse; do
