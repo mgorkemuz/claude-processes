@@ -58,6 +58,8 @@ CC_ROOT=$(cc_find_root) || {
 . "$CC_ROOT/lib/config.sh"
 # shellcheck source=/dev/null
 . "$CC_ROOT/lib/history.sh"
+# shellcheck source=/dev/null
+. "$CC_ROOT/lib/stash.sh"
 
 # ---- helpers ----------------------------------------------------------------
 
@@ -320,6 +322,112 @@ Options:
 EOF
 }
 
+# ---- subcommand: stash / unstash -------------------------------------------
+
+cmd_stash() {
+  # `stash list` is a sub-subcommand
+  if [ "${1:-}" = "list" ]; then shift; cc_stash_list "$@"; return; fi
+
+  local mode="" target=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session)   mode="session"; target="$2"; shift 2 ;;
+      --session=*) mode="session"; target="${1#--session=}"; shift ;;
+      --current)   mode="current"; shift ;;
+      -h|--help)   cc_usage_stash; return 0 ;;
+      -*) echo "claude-clean stash: unknown flag: $1" >&2; return 2 ;;
+      *)  mode="pid"; target="$1"; shift ;;
+    esac
+  done
+
+  cc_have_jq || { echo "claude-clean: jq required" >&2; return 1; }
+  cc_config_init
+
+  local ids=()
+  case "$mode" in
+    pid)
+      [ -z "$target" ] && { cc_usage_stash; return 2; }
+      local id; id=$(cc_stash_kill_target "$target") || return 1
+      ids+=("$id")
+      ;;
+    session)
+      [ -z "$target" ] && { cc_usage_stash; return 2; }
+      local roots; roots=$(cc_session_all_pids "$target")
+      [ -z "$roots" ] && { echo "no tracked processes for session $target"; return 0; }
+      local p
+      while IFS= read -r p; do
+        cc_is_alive "$p" || continue
+        local id; id=$(cc_stash_kill_target "$p") && ids+=("$id")
+      done <<< "$roots"
+      cc_session_delete "$target"
+      ;;
+    current)
+      local session; session=$(cc_discover_current_session)
+      [ -z "$session" ] && { echo "no active Claude session detected" >&2; return 1; }
+      local roots; roots=$(cc_session_all_pids "$session")
+      [ -z "$roots" ] && { echo "session $session has no tracked processes"; return 0; }
+      local p
+      while IFS= read -r p; do
+        cc_is_alive "$p" || continue
+        local id; id=$(cc_stash_kill_target "$p") && ids+=("$id")
+      done <<< "$roots"
+      cc_session_delete "$session"
+      ;;
+    *) cc_usage_stash; return 2 ;;
+  esac
+
+  if [ "${#ids[@]}" -gt 0 ]; then
+    echo "stashed ${#ids[@]} process tree(s):"
+    printf '  %s\n' "${ids[@]}"
+    echo "resume with: claude-clean unstash <stash_id>"
+  else
+    echo "nothing stashed"
+  fi
+}
+
+cmd_unstash() {
+  local target="" attach=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --attach) attach="--attach"; shift ;;
+      -h|--help) cc_usage_unstash; return 0 ;;
+      -*) echo "claude-clean unstash: unknown flag: $1" >&2; return 2 ;;
+      *) target="$1"; shift ;;
+    esac
+  done
+
+  [ -z "$target" ] && { cc_usage_unstash; return 2; }
+  cc_have_jq || { echo "claude-clean: jq required" >&2; return 1; }
+
+  local new_pid; new_pid=$(cc_respawn "$target" "$attach") || return 1
+  echo "resumed: pid $new_pid"
+  [ -n "$attach" ] && echo "attached to current session"
+  echo "logs: /tmp/claude-clean-${target}.log"
+}
+
+cc_usage_stash() {
+  cat <<'EOF'
+Usage:
+  claude-clean stash <pid>               Stash a specific pid + descendants.
+  claude-clean stash --session <id>      Stash all processes of a session.
+  claude-clean stash --current           Stash this Claude session's processes.
+  claude-clean stash list                Show available snapshots.
+
+Stash snapshots command, cwd, and allowlisted env vars to
+~/.claude/.clean/stashed/<id>.json, then kills the tree. Resume later with
+`claude-clean unstash <id>`.
+EOF
+}
+
+cc_usage_unstash() {
+  cat <<'EOF'
+Usage:
+  claude-clean unstash <stash_id>              Respawn in original cwd.
+  claude-clean unstash <stash_id> --attach     Also register with the
+                                                 current Claude session.
+EOF
+}
+
 # ---- subcommand: prompt (internal, called by Stop hook) ---------------------
 
 cmd_prompt() {
@@ -423,8 +531,7 @@ hook_post_tool_use() {
   local existing; existing=$(cc_session_all_pids "$session_id" | sort -u)
   local command
   command=$(jq -r '.tool_input.command // ""' <<< "$event" 2>/dev/null)
-  # Truncate very long commands — state file stays readable.
-  [ "${#command}" -gt 200 ] && command="${command:0:197}..."
+  # Full command retained — stash/resume needs the exact string to respawn.
 
   local kid
   while IFS= read -r kid; do
@@ -495,6 +602,8 @@ Commands:
   kill <pid>                          Terminate a pid + descendants.
   kill --session <id>                 Terminate everything a session spawned.
   kill --orphans                      Terminate all orphaned trees.
+  stash <target>                      Snapshot + kill (see stash --help).
+  unstash <id>                        Respawn a stashed process.
   sessions                            List tracked session IDs.
   prompt <session_id>                 Print kill summary for one session.
   hook <event>                        Internal; called by Claude Code hooks.
@@ -513,6 +622,8 @@ main() {
     list)     cmd_list "$@" ;;
     status)   cmd_status "$@" ;;
     kill)     cmd_kill "$@" ;;
+    stash)    cmd_stash "$@" ;;
+    unstash)  cmd_unstash "$@" ;;
     prompt)   cmd_prompt "$@" ;;
     hook)     cmd_hook "$@" ;;
     sessions) cmd_sessions "$@" ;;
